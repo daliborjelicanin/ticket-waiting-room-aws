@@ -10,7 +10,17 @@ dependencies {
     implementation(libs.aws.lambda.core)
 
     implementation(platform(libs.aws.sdk.bom))
-    implementation(libs.aws.sdk.dynamodb)
+
+    // Lambda charges cold-start time for every class it loads, and the SDK's default HTTP
+    // stacks are the biggest contributor: Apache 5 for sync calls and Netty for async,
+    // 15 jars between them, none of which this function needs. url-connection-client is a
+    // thin wrapper over the JDK's own HttpURLConnection with no transitive dependencies.
+    // Dropping the other two is what keeps initialisation inside Lambda's 10s INIT budget.
+    implementation(libs.aws.sdk.dynamodb) {
+        exclude(group = "software.amazon.awssdk", module = "apache5-client")
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+    }
+    implementation(libs.aws.sdk.url.connection.client)
 
     // The runtime interface client is what lets a plain JDK base image speak Lambda's
     // runtime API — the piece the public.ecr.aws/lambda/java base images bundle and

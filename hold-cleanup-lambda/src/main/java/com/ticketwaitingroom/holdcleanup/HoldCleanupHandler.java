@@ -3,6 +3,7 @@ package com.ticketwaitingroom.holdcleanup;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.ticketwaitingroom.common.events.SeatHoldExpiredEvent;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 
 import java.time.Clock;
@@ -79,7 +80,9 @@ public class HoldCleanupHandler implements RequestHandler<Map<String, Object>, H
      * nothing, which is every test in this module.
      */
     private static final class SharedClient {
-        private static final DynamoDbClient INSTANCE = DynamoDbClient.create();
+        private static final DynamoDbClient INSTANCE = DynamoDbClient.builder()
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
+                .build();
     }
 
     /**
@@ -94,10 +97,17 @@ public class HoldCleanupHandler implements RequestHandler<Map<String, Object>, H
         return value;
     }
 
-    /** {@code context} is null in unit tests, where stdout is still captured. */
+    /**
+     * The trailing newline is required, not cosmetic. {@code LambdaLogger.log} writes the
+     * string verbatim with no line terminator, and a final unterminated write is discarded
+     * when the invocation ends rather than flushed — so the summary line vanished from
+     * CloudWatch entirely while the invocation still reported success.
+     *
+     * <p>{@code context} is null in unit tests, where stdout is captured instead.
+     */
     private static void log(Context context, String message) {
         if (context != null) {
-            context.getLogger().log(message);
+            context.getLogger().log(message + System.lineSeparator());
         } else {
             System.out.println(message);
         }
