@@ -49,10 +49,14 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - **Learn:** ECR, task defs, task roles vs execution roles, Fargate networking
 
 ### 2. Hold expiration — $0 standing
-- [ ] EventBridge schedule → cleanup Lambda (first Lambda) reclaiming expired holds
-      (conditional write: only if still HELD and expired)
-- [ ] Verify TTL + cleanup interplay; document why TTL alone isn't enough
-- **Learn:** Lambda packaging (Java or a thin script), EventBridge, DynamoDB TTL semantics
+- [x] EventBridge schedule → cleanup Lambda (first Lambda) reclaiming expired holds
+      (conditional write: only if still HELD and expired) — see `runbook-hold-cleanup.md`
+- [x] Verify TTL + cleanup interplay; document why TTL alone isn't enough
+      — abandoned hold reclaimed by the schedule alone in **~53s**, no manual invoke;
+      live holds and SOLD-with-stale-TTL seats untouched (2026-08-22)
+- **Teardown:** disable the `hold-seat-schedule` schedule; everything else stays at $0
+- **Learn:** Lambda packaging (container image + runtime interface client), EventBridge
+  Scheduler, the 10s INIT budget, DynamoDB TTL semantics
 
 ### 3. Waiting Room service + Redis — Redis is session-only (~$0.017/hr)
 - [ ] Code: queue join/position/admit API on Redis sorted sets (Testcontainers locally)

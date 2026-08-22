@@ -39,11 +39,18 @@ for what to build next and keep its checkboxes up to date as slices complete.
 ### Modules
 
 - `common` — plain `java-library`, shared event/message DTOs (SQS/SNS/EventBridge
-  contracts) and exception types. No dependency on any service module; services
-  depend on it, never the reverse.
+  contracts), exception types, and cross-deployable data contracts such as
+  `SeatTableSchema` (the DynamoDB attribute names shared by every writer of the
+  seat table). No dependency on any service module; services depend on it, never
+  the reverse.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.
+- `hold-cleanup-lambda` — plain `java-library` (no Spring: a DI container in a Lambda
+  is cold-start tax). Packaged as a container image on `eclipse-temurin` with the AWS
+  runtime interface client as the entrypoint, because no managed Lambda runtime offers
+  JDK 26. `./gradlew :hold-cleanup-lambda:build` stages the deployment package into
+  `build/lambda/lib` for the Docker build. See `docs/runbook-hold-cleanup.md`.
 
 ### Build Commands
 
@@ -55,7 +62,10 @@ for what to build next and keep its checkboxes up to date as slices complete.
   module's dependency tree (useful for checking `common` stays dependency-free)
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-Lambda modules, Docker/Jib/`bootBuildImage` config, Terraform, CI workflow files.
+further Lambda modules (QR generation, WebSocket connect/disconnect), Jib/
+`bootBuildImage` config, Terraform, CI workflow files. Docker packaging is
+hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service)
+and `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
 ## AWS Services by Category
 
