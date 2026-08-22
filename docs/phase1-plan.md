@@ -41,9 +41,10 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 ### 1. Seat Inventory on real AWS — the centerpiece — ~$0.01/hr while up
 - [x] Code: release-hold + confirm-purchase endpoints, seed endpoint/script
 - [x] DynamoDB table (on-demand) + TTL on `holdExpiresAt` — see `runbook-seat-inventory.md`
-- [ ] ECR repo, build & push image (first Docker packaging of a service)
-- [ ] ECS cluster + task definition + Fargate service (public subnet, public IP, SG restricted to my IP), least-privilege task role for DynamoDB
-- [ ] Verify: `curl` hold/release/confirm against public IP; race it with a concurrent script → exactly one 201
+- [x] ECR repo, build & push image (first Docker packaging of a service) — see `runbook-ecr-packaging.md`
+- [x] ECS cluster + task definition + Fargate service (public subnet, public IP, SG restricted to my IP), least-privilege task role for DynamoDB — see `runbook-ecs-fargate.md`
+- [x] Verify: `curl` hold/release/confirm against public IP; race it with a concurrent script → exactly one 201
+      — **30 concurrent holds on one seat → 1×201, 29×409** on real Fargate + DynamoDB (2026-08-22)
 - **Teardown:** ECS service → cluster stays (free), table stays (free), ECR stays (free)
 - **Learn:** ECR, task defs, task roles vs execution roles, Fargate networking
 

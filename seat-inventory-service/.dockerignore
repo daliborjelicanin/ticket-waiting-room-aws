@@ -1,0 +1,5 @@
+# Ship only the built jar into the build context. Gradle builds the artifact;
+# Docker just packages it. This keeps the context at ~34 MB instead of the whole
+# module, and stops a stale build/classes tree from silently altering an image.
+**
+!build/libs/seat-inventory-service.jar

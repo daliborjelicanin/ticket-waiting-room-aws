@@ -102,6 +102,39 @@ AWS via the default credentials chain (`SeatInventoryConfig.dynamoDbClient`):
 Worth doing before the ECS slice: it separates "table + IAM + region config work" from
 "image + task role work", so a later Fargate failure has half the search space.
 
+### Local Smoke Test Against the Real Table
+
+Verified 2026-08-22 — full lifecycle, laptop → real DynamoDB in `eu-central-1`:
+
+```bash
+# seed -> 201 {"created":3,"skipped":0}
+curl -s -X POST localhost:8080/admin/events/evt-1/seats \
+  -H 'Content-Type: application/json' -d '{"seatIds":["A-1","A-2","A-3"]}'
+
+# hold -> 201, returns holdId + expiresAt
+HOLD=$(curl -s -X POST localhost:8080/events/evt-1/seats/A-1/hold \
+  | sed -n 's/.*"holdId":"\([^"]*\)".*/\1/p')
+
+curl -s -X POST localhost:8080/events/evt-1/seats/A-1/hold          # -> 409 seat unavailable
+curl -s -X POST localhost:8080/events/evt-1/seats/A-1/purchase \
+  -H 'Content-Type: application/json' -d '{"holdId":"wrong"}'       # -> 404 hold not found
+curl -s -X POST localhost:8080/events/evt-1/seats/A-1/purchase \
+  -H 'Content-Type: application/json' -d "{\"holdId\":\"$HOLD\"}"   # -> 200 SOLD
+
+aws dynamodb get-item --table-name seat-inventory --region eu-central-1 \
+  --key '{"pk":{"S":"EVENT#evt-1"},"sk":{"S":"SEAT#A-1"}}'
+```
+
+Two things this confirms that config inspection cannot:
+
+- While HELD, the item carries `holdExpiresAt` as **`{"N": "1787402234"}`** — a Number in
+  epoch *seconds*. Wrong type or wrong unit is the silent-failure mode described below,
+  and this is how to rule it out.
+- Once SOLD, `holdExpiresAt` is **gone** from the item while `holdId` remains. The TTL
+  can no longer reach a sold seat, and the winning hold stays as the audit trail.
+
+Repeating the purchase after the seat is SOLD returns 404 rather than selling it twice.
+
 ## TTL Semantics — Why the Cleanup Lambda Is Not Optional
 
 Two properties of DynamoDB TTL drive design decisions elsewhere in this codebase:
