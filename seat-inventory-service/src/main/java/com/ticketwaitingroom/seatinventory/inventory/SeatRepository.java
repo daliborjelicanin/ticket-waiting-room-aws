@@ -13,6 +13,16 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import java.time.Instant;
 import java.util.Map;
 
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_EVENT_ID;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_HOLD_EXPIRES_AT;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_HOLD_ID;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_PK;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_SEAT_ID;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_SK;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_STATUS;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.pk;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.sk;
+
 /**
  * Single-table DynamoDB access for seat inventory.
  *
@@ -36,14 +46,6 @@ import java.util.Map;
  */
 @RequiredArgsConstructor
 public class SeatRepository {
-
-    static final String ATTR_PK = "pk";
-    static final String ATTR_SK = "sk";
-    static final String ATTR_EVENT_ID = "eventId";
-    static final String ATTR_SEAT_ID = "seatId";
-    static final String ATTR_STATUS = "status";
-    static final String ATTR_HOLD_ID = "holdId";
-    static final String ATTR_HOLD_EXPIRES_AT = "holdExpiresAt";
 
     private final DynamoDbClient dynamo;
     private final String tableName;
@@ -200,14 +202,6 @@ public class SeatRepository {
                 SeatStatus.valueOf(item.get(ATTR_STATUS).s()),
                 item.containsKey(ATTR_HOLD_ID) ? item.get(ATTR_HOLD_ID).s() : null,
                 ttl != null ? Instant.ofEpochSecond(Long.parseLong(ttl.n())) : null);
-    }
-
-    static String pk(String eventId) {
-        return "EVENT#" + eventId;
-    }
-
-    static String sk(String seatId) {
-        return "SEAT#" + seatId;
     }
 
     private static AttributeValue s(String value) {

@@ -11,4 +11,5 @@ include(
     "checkout-payment-service",
     "ticket-issuance-service",
     "notification-service",
+    "hold-cleanup-lambda",
 )

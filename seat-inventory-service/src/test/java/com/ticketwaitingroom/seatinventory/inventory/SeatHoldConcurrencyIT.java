@@ -2,6 +2,7 @@ package com.ticketwaitingroom.seatinventory.inventory;
 
 import com.ticketwaitingroom.common.exceptions.HoldNotFoundException;
 import com.ticketwaitingroom.common.exceptions.SeatUnavailableException;
+import com.ticketwaitingroom.common.inventory.SeatTableSchema;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -249,14 +250,14 @@ class SeatHoldConcurrencyIT {
         dynamo.createTable(CreateTableRequest.builder()
                 .tableName(TABLE)
                 .attributeDefinitions(
-                        AttributeDefinition.builder().attributeName(SeatRepository.ATTR_PK)
+                        AttributeDefinition.builder().attributeName(SeatTableSchema.ATTR_PK)
                                 .attributeType(ScalarAttributeType.S).build(),
-                        AttributeDefinition.builder().attributeName(SeatRepository.ATTR_SK)
+                        AttributeDefinition.builder().attributeName(SeatTableSchema.ATTR_SK)
                                 .attributeType(ScalarAttributeType.S).build())
                 .keySchema(
-                        KeySchemaElement.builder().attributeName(SeatRepository.ATTR_PK)
+                        KeySchemaElement.builder().attributeName(SeatTableSchema.ATTR_PK)
                                 .keyType(KeyType.HASH).build(),
-                        KeySchemaElement.builder().attributeName(SeatRepository.ATTR_SK)
+                        KeySchemaElement.builder().attributeName(SeatTableSchema.ATTR_SK)
                                 .keyType(KeyType.RANGE).build())
                 .billingMode(BillingMode.PAY_PER_REQUEST)
                 .build());
@@ -266,7 +267,7 @@ class SeatHoldConcurrencyIT {
                 .tableName(TABLE)
                 .timeToLiveSpecification(TimeToLiveSpecification.builder()
                         .enabled(true)
-                        .attributeName(SeatRepository.ATTR_HOLD_EXPIRES_AT)
+                        .attributeName(SeatTableSchema.ATTR_HOLD_EXPIRES_AT)
                         .build())
                 .build());
     }

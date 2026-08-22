@@ -1,0 +1,5 @@
+# Whitelist, same shape as seat-inventory-service: exclude everything, then re-admit only
+# the staged deployment package. Keeps the build context to the jars Docker actually
+# copies instead of the whole module (src/, build/classes/, test reports, ...).
+**
+!build/lambda/lib/**

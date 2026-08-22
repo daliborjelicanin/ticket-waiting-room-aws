@@ -1,6 +1,8 @@
 [versions]
 springBoot = "4.1.0"
 awsSdk = "2.46.21"
+awsLambdaCore = "1.4.0"
+awsLambdaRic = "2.8.3"
 junit = "6.1.1"
 testcontainers = "2.0.5"
 assertj = "3.27.7"
@@ -15,6 +17,8 @@ aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awsSdk" }
 aws-sdk-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
 aws-sdk-sqs = { module = "software.amazon.awssdk:sqs" }
 aws-sdk-sns = { module = "software.amazon.awssdk:sns" }
+aws-lambda-core = { module = "com.amazonaws:aws-lambda-java-core", version.ref = "awsLambdaCore" }
+aws-lambda-ric = { module = "com.amazonaws:aws-lambda-java-runtime-interface-client", version.ref = "awsLambdaRic" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
