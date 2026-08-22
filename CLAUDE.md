@@ -75,7 +75,8 @@ Lambda modules, Docker/Jib/`bootBuildImage` config, Terraform, CI workflow files
 - VPC — public/private subnets, NAT Gateway, backend isolation
 
 **Data**
-- DynamoDB — seat inventory and holds: single-table design, conditional writes for atomic seat locking, TTL for auto-expiring holds. **This is the centerpiece of the project** and proves concurrency understanding.
+- DynamoDB — seat inventory and holds: single-table design, conditional writes for atomic seat locking, TTL for auto-expiring holds. 
+- **This is the centerpiece of the project** and proves concurrency understanding.
 - ElastiCache (Redis) — waiting-room queue ordering (sorted sets) and/or secondary distributed lock
 - RDS (Postgres) — orders, payments, users — requires real ACID transactions
 - S3 — event images, generated ticket QR codes, receipts
@@ -136,7 +137,7 @@ Lambda modules, Docker/Jib/`bootBuildImage` config, Terraform, CI workflow files
 - Favor explicit, testable concurrency logic (conditional writes, optimistic locking,
   idempotency keys) over incidental thread-safety — the whole point of this codebase
   is that this logic is visible and correct, not hidden behind a framework default.
-- Use Lombok `@RequiredArgsConstructor` instead of a hand-written constructor
+- Use Lombok `@RequiredArgsConstructor` instead of a handwritten constructor
   whenever the constructor would only assign `final` fields (typical Spring
   constructor injection). Write an explicit constructor only when it must do
   more than field assignment. Do not use other Lombok features on records —

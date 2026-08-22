@@ -33,17 +33,16 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 ## Slices
 
 ### 0. Account foundations — $0
-- [ ] Budget alert ($10) + billing alarm
-- [ ] IAM Identity Center (or IAM user w/ MFA) for daily work — no root usage
-- [ ] Pick region (eu-central-1 or cheapest nearby), default tags
+- [x] Budget alert ($10) + billing alarm
+- [x] IAM Identity Center (or IAM user w/ MFA) for daily work — no root usage
+- [x] Pick region (eu-central-1 or cheapest nearby), default tags
 - **Learn:** account hygiene, IAM basics
 
 ### 1. Seat Inventory on real AWS — the centerpiece — ~$0.01/hr while up
 - [x] Code: release-hold + confirm-purchase endpoints, seed endpoint/script
-- [ ] DynamoDB table (on-demand) + TTL on `holdExpiresAt`
+- [x] DynamoDB table (on-demand) + TTL on `holdExpiresAt` — see `runbook-seat-inventory.md`
 - [ ] ECR repo, build & push image (first Docker packaging of a service)
-- [ ] ECS cluster + task definition + Fargate service (public subnet, public IP,
-SG restricted to my IP), least-privilege task role for DynamoDB
+- [ ] ECS cluster + task definition + Fargate service (public subnet, public IP, SG restricted to my IP), least-privilege task role for DynamoDB
 - [ ] Verify: `curl` hold/release/confirm against public IP; race it with a concurrent script → exactly one 201
 - **Teardown:** ECS service → cluster stays (free), table stays (free), ECR stays (free)
 - **Learn:** ECR, task defs, task roles vs execution roles, Fargate networking
@@ -74,8 +73,7 @@ SG restricted to my IP), least-privilege task role for DynamoDB
 
 ### 5. Ticket Issuance + Notification — $0 standing
 - [ ] Code: issuance service consumes SQS, persists tickets, QR-generation Lambda → S3
-- [ ] SNS topic fan-out for purchase confirmation; notification service (email via
-      SNS/SES sandbox)
+- [ ] SNS topic fan-out for purchase confirmation; notification service (email via SNS/SES sandbox)
 - [ ] Verify full purchase flow end-to-end
 - **Learn:** SQS consumers, SNS fan-out, S3 presigned URLs
 
