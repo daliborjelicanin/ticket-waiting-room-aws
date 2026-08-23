@@ -64,9 +64,17 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       admission; each operation is one Lua script so stamp+enqueue and pop+admit cannot
       half-apply. **100 concurrent HTTP joins → 100 distinct contiguous places, admission
       order matched the places handed out exactly, 0 duplicates** (2026-08-23)
-- [ ] ElastiCache `cache.t4g.micro`, single node, same VPC; second Fargate service
-- [ ] Verify FIFO admission under concurrent joins
-- **Teardown:** delete ElastiCache cluster + ECS service every session
+- [x] ElastiCache `cache.t4g.micro`, single node, same VPC; second Fargate service
+      — see `runbook-waiting-room-redis.md`. Cache reachable only from the task's security
+      group (no public endpoint exists for ElastiCache at all), pinned to eu-central-1a to
+      keep every Redis round trip inside one AZ. No task role: this service makes no AWS
+      API calls (2026-08-23)
+- [x] Verify FIFO admission under concurrent joins
+      — **100 concurrent joins on real Fargate + ElastiCache → 100 distinct contiguous
+      places, admission order matched the places handed out exactly, 0 duplicates**;
+      identical to the local Testcontainers result, now over a real network (2026-08-23)
+- **Teardown:** delete ElastiCache cluster + ECS service every session — the cache bills
+  whether or not anything connects to it
 - **Learn:** ElastiCache networking/SGs, sorted-set queue pattern
 
 ### 4. Checkout saga: Step Functions + RDS + SQS — RDS is session-only (~$0.017/hr)

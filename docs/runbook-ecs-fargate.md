@@ -13,12 +13,12 @@ Prerequisite: the image is already in ECR — see `runbook-ecr-packaging.md`.
 |---|---|
 | Cluster | `ticket-waiting-room` — Fargate only, Container Insights **disabled** |
 | Capacity provider | `FARGATE_SPOT` (weight 1) |
-| Task definition | `seat-inventory-service:2` |
+| Task definition | `seat-inventory-service:2` — **superseded, see note below; use `:3`** |
 | Size | 256 CPU units (0.25 vCPU) / 512 MB |
 | Network mode | `awsvpc`, `X86_64` / `LINUX` |
 | Image | `…/seat-inventory-service@sha256:697fc7a48212ce2ec37c61a75a17e4aeab915aff8d33d0de11e67a63a948611b` |
 | Task role | `seat-inventory-task-role` |
-| Execution role | `ecsTaskExecutionRole` |
+| Execution role | `ecsTaskExecutionRole` — **deleted since; replaced by `ticket-ecs-execution-role`** |
 | Port | 8080/tcp |
 | Env | `AWS_REGION=eu-central-1` |
 | Logs | `/ecs/seat-inventory-service`, retention **1 day**, prefix `ecs` |
@@ -266,10 +266,14 @@ any IAM allow — including the account root's. `aws s3api delete-bucket-policy`
 - `aws_ecs_cluster` + `aws_ecs_cluster_capacity_providers`; `aws_ecs_task_definition` with
   `container_definitions` from `jsonencode()`; `aws_ecs_service` with
   `network_configuration` and `capacity_provider_strategy`.
-- **Create a project-owned execution role.** `ecsTaskExecutionRole` here is inherited from
-  an unrelated 2024 project — adopting it would give the IaC an undeclared dependency on a
-  hand-made artifact. Terraform should build its own with
-  `AmazonECSTaskExecutionRolePolicy` attached.
+- **Create a project-owned execution role.** ~~`ecsTaskExecutionRole` here is inherited
+  from an unrelated 2024 project~~ — **this happened for real on 2026-08-23**: the account
+  sweep deleted `ecsTaskExecutionRole`, which silently broke `seat-inventory-service:2`,
+  since a task definition stores the role ARN and nothing revalidates it. Replaced by
+  project-owned `ticket-ecs-execution-role` (`AmazonECSTaskExecutionRolePolicy` plus the
+  `aws:SourceAccount`/`aws:SourceArn` confused-deputy conditions), and revision **3**
+  re-registered against it. The lesson stands for Terraform, now with evidence: an
+  undeclared dependency on a hand-made artifact fails at launch time, not at edit time.
 - The task role's policy is a natural `aws_iam_policy_document` with the table ARN
   interpolated from the `aws_dynamodb_table` resource, rather than hardcoded.
 - My IP in the security group belongs in a variable, not the config — it changes with the
