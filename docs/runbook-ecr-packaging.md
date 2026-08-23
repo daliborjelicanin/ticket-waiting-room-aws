@@ -122,6 +122,8 @@ Both tags should report the **same digest** — one manifest, two names, billed 
 
 ## Current State
 
+### `seat-inventory-service` (slice 1, 2026-08-22)
+
 | | |
 |---|---|
 | Repository URI | `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/seat-inventory-service` |
@@ -131,6 +133,33 @@ Both tags should report the **same digest** — one manifest, two names, billed 
 | Tag mutability | MUTABLE |
 | Scan on push | **off** — not enabled at creation |
 | Lifecycle policy | **none set** |
+
+### `waiting-room-service` (slice 3, 2026-08-23)
+
+| | |
+|---|---|
+| Repository URI | `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/waiting-room-service` |
+| Tags | `6a55391`, `latest` (same digest) |
+| Digest | `sha256:1c52fcc2af92b4a16ff77daa16eb17cd03af230a766510d343d8342326da2cc4` |
+| Stored | 140 MB compressed (60 dependency jars vs seat-inventory's ~79 — no AWS SDK) |
+| Tag mutability | MUTABLE |
+| Scan on push | **on** — the gap above, fixed at creation this time |
+| Lifecycle policy | keep last 3 |
+
+The packaging steps repeated verbatim. Three things differ about the *service*, and they
+matter when the task definition is written:
+
+- **No task role.** This service makes no AWS API calls at all — its only dependency is
+  the ElastiCache endpoint, gated by security group rather than IAM. Slice 1's task role
+  has no counterpart here; only the execution role (ECR pull + logs) is needed.
+- **`REDIS_HOST`/`REDIS_PORT` replace `AWS_REGION`** as the task definition's environment
+  variables, and they are *required* — the image carries no working default, because the
+  ElastiCache endpoint does not exist until the cluster is created. That sequencing is
+  real: the cache must exist before the task definition can be written.
+- **`REDIS_SSL`** must be `true` if the cluster is created with encryption in transit
+  enabled. Left unset it defaults to `false`. A mismatch surfaces as an opaque connection
+  timeout, not a TLS error — no truststore work is needed either way, since ElastiCache
+  certificates chain to Amazon Root CA and the Temurin base image already trusts it.
 
 ## Cost
 

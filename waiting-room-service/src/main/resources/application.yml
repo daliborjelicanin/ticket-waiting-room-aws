@@ -6,6 +6,12 @@ spring:
       # Local default; in ECS these point at the ElastiCache primary endpoint.
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      ssl:
+        # Must be true when the ElastiCache cluster has encryption in transit
+        # enabled, or Lettuce fails with an opaque connection timeout rather than
+        # a TLS error. No truststore work is needed: ElastiCache certificates
+        # chain to Amazon Root CA, which the Temurin image already trusts.
+        enabled: ${REDIS_SSL:false}
 
 waiting-room:
   # How long an admitted token may shop before its slot is forfeit and reclaimed.
