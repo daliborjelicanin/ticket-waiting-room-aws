@@ -46,6 +46,9 @@ for what to build next and keep its checkboxes up to date as slices complete.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.
+  `waiting-room-service` keeps its queue logic in Lua scripts under
+  `src/main/resources/redis` (`join`/`position`/`admit`) rather than in Java: each
+  operation must be one atomic round trip, so the reasoning lives next to the commands.
 - `hold-cleanup-lambda` — plain `java-library` (no Spring: a DI container in a Lambda
   is cold-start tax). Packaged as a container image on `eclipse-temurin` with the AWS
   runtime interface client as the entrypoint, because no managed Lambda runtime offers
@@ -124,7 +127,9 @@ and `hold-cleanup-lambda/Dockerfile` (Lambda container image).
   Lambda — holds must self-expire without relying solely on client behavior.
 - **Redis sorted sets for queue ordering** — the waiting room's fairness guarantee
   (first-in-first-out admission) depends on this, not on request arrival order at
-  the API layer.
+  the API layer. The score must stay an `INCR` ticket number: scoring by wall clock
+  ties for joins in the same millisecond, and a sorted set breaks ties by member name,
+  which silently orders the queue by token UUID. Admission is `ZPOPMIN` from the head.
 - **Saga pattern via Step Functions** for checkout (hold seats → charge payment →
   issue tickets → notify), with explicit compensation (seat release) on payment
   failure — checkout must never leave seats held-but-unpaid indefinitely or silently

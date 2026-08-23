@@ -1,3 +1,15 @@
 spring:
   application:
     name: waiting-room-service
+  data:
+    redis:
+      # Local default; in ECS these point at the ElastiCache primary endpoint.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+waiting-room:
+  # How long an admitted token may shop before its slot is forfeit and reclaimed.
+  admission-duration: PT10M
+  max-admit-batch: 500
+  # Idle lifetime of an event's queue keys, refreshed on every join and admit.
+  key-ttl: PT24H

@@ -59,7 +59,11 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
   Scheduler, the 10s INIT budget, DynamoDB TTL semantics
 
 ### 3. Waiting Room service + Redis — Redis is session-only (~$0.017/hr)
-- [ ] Code: queue join/position/admit API on Redis sorted sets (Testcontainers locally)
+- [x] Code: queue join/position/admit API on Redis sorted sets (Testcontainers locally)
+      — FIFO comes from an `INCR` ticket number as the sorted-set score plus `ZPOPMIN`
+      admission; each operation is one Lua script so stamp+enqueue and pop+admit cannot
+      half-apply. **100 concurrent HTTP joins → 100 distinct contiguous places, admission
+      order matched the places handed out exactly, 0 duplicates** (2026-08-23)
 - [ ] ElastiCache `cache.t4g.micro`, single node, same VPC; second Fargate service
 - [ ] Verify FIFO admission under concurrent joins
 - **Teardown:** delete ElastiCache cluster + ECS service every session

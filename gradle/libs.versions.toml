@@ -13,6 +13,7 @@ foojayResolver = "1.0.0"
 [libraries]
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "springBoot" }
+spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis", version.ref = "springBoot" }
 aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awsSdk" }
 aws-sdk-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
 aws-sdk-sqs = { module = "software.amazon.awssdk:sqs" }
