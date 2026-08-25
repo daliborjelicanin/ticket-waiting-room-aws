@@ -161,6 +161,44 @@ matter when the task definition is written:
   timeout, not a TLS error — no truststore work is needed either way, since ElastiCache
   certificates chain to Amazon Root CA and the Temurin base image already trusts it.
 
+### `checkout-payment-service` (slice 4, 2026-08-25)
+
+| | |
+|---|---|
+| Repository URI | `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/checkout-payment-service` |
+| Tags | `12acc71`, `latest` (same digest) |
+| Digest | `sha256:da24762ce3d8ad39e09c3d30293f7f48d4c2e8322c65fed0c02b00916d5e9666` |
+| Stored | 156 MB compressed (largest of the three — JPA, Hibernate, Flyway, the JDBC driver) |
+| Scan on push | on |
+| Lifecycle policy | untagged expire after 7 days; keep last 3 |
+
+Like `waiting-room-service` this needs **no task role** — but for a different reason worth
+being precise about. It does touch an AWS service (Secrets Manager, for the database
+password), yet the fetch happens in the *execution* role's phase, before the container
+starts, and the value arrives as a plain environment variable. The application code makes
+no AWS calls at all, so there is nothing for a task role to grant.
+
+Required at runtime, none of which the image can default usefully:
+
+| Variable | Where it comes from |
+|---|---|
+| `DB_URL` | `environment` — the RDS endpoint, unknown until the instance exists |
+| `DB_USERNAME` | `secrets` → `arn:...:secret:rds!db-xxx:username::` |
+| `DB_PASSWORD` | `secrets` → `arn:...:secret:rds!db-xxx:password::` |
+
+The `:key::` suffix on the ARN selects one field out of the secret's JSON. `DB_URL` cannot
+come from the secret: an RDS-managed master secret carries the credentials, not the
+endpoint.
+
+**The execution role needs `secretsmanager:GetSecretValue` for any of this to work.**
+`AmazonECSTaskExecutionRolePolicy` grants only ECR pull and CloudWatch Logs — six actions,
+none of them Secrets Manager. Without the extra grant the task dies before your code exists,
+with the same misleading `unable to pull secrets or registry auth` error documented in
+`runbook-ecs-fargate.md`. Added to `ticket-ecs-execution-role` on 2026-08-25 as the inline
+policy `ReadDatabaseSecrets`, scoped to `secret:rds!*` and `secret:ticket-*` rather than
+`*`. Tighten to the exact ARN once RDS has created the secret. A customer-managed KMS key
+would additionally require `kms:Decrypt`; the default `aws/secretsmanager` key does not.
+
 ## Cost
 
 ECR bills **compressed** stored bytes, not the local image size: 140 MB here, against a

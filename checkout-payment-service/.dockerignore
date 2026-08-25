@@ -1,0 +1,5 @@
+# Ship only the built jar into the build context. Gradle builds the artifact;
+# Docker just packages it. This keeps the context small instead of the whole
+# module, and stops a stale build/classes tree from silently altering an image.
+**
+!build/libs/checkout-payment-service.jar
