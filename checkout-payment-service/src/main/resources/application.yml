@@ -1,3 +1,25 @@
 spring:
   application:
     name: checkout-payment-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/checkout}
+    username: ${DB_USERNAME:checkout}
+    password: ${DB_PASSWORD:checkout}
+  jpa:
+    hibernate:
+      # Flyway owns the schema. `validate` turns a drifted entity mapping into a startup
+      # failure instead of a silent ALTER against a production table.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+
+checkout:
+  currency: EUR
+
+payment-gateway:
+  # Chaos knobs for load testing. Both default to 0 so behaviour is deterministic unless
+  # asked otherwise; the tok_decline / tok_error tokens drive the deterministic paths.
+  decline-rate: 0.0
+  error-rate: 0.0
+  latency: PT0S

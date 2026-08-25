@@ -78,8 +78,14 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - **Learn:** ElastiCache networking/SGs, sorted-set queue pattern
 
 ### 4. Checkout saga: Step Functions + RDS + SQS — RDS is session-only (~$0.017/hr)
-- [ ] Code: checkout-payment service (orders/payments in Postgres, mock payment
+- [x] Code: checkout-payment service (orders/payments in Postgres, mock payment
       gateway with configurable failure), Flyway migrations
+      — no-double-charge rests on two DB constraints, not application code: a unique
+      idempotency key, and a **partial unique index** allowing at most one PENDING-or-
+      CAPTURED payment per order. Gateway is called *outside* the transaction, between two
+      committed ones, so a crash mid-charge leaves a recoverable PENDING row rather than an
+      untracked charge. **50 concurrent charges with distinct keys on one order → 1×200,
+      49×409, exactly one CAPTURED row, gateway invoked once** (2026-08-23)
 - [ ] RDS Postgres `db.t4g.micro` single-AZ; Secrets Manager for credentials
 - [ ] Step Functions state machine: hold seats → charge → issue tickets → notify,
       with compensation (release holds) on payment failure
@@ -108,7 +114,7 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;
       capture "0 double-sold seats" numbers + latency percentiles
 - **Learn:** custom metrics, X-Ray, load testing — this produces the README's money chart
-
+.
 ### 8. Wrap-up
 - [ ] README: architecture diagram, "why each service exists", concurrency deep-dive, load-test results, cost notes
 - [ ] Full teardown sweep (tag-based search for stragglers)

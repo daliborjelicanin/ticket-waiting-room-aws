@@ -49,6 +49,9 @@ for what to build next and keep its checkboxes up to date as slices complete.
   `waiting-room-service` keeps its queue logic in Lua scripts under
   `src/main/resources/redis` (`join`/`position`/`admit`) rather than in Java: each
   operation must be one atomic round trip, so the reasoning lives next to the commands.
+  `checkout-payment-service` owns the Postgres schema in Flyway migrations under
+  `src/main/resources/db/migration`, with `ddl-auto: validate` so entity drift fails at
+  startup instead of silently altering a live table.
 - `hold-cleanup-lambda` — plain `java-library` (no Spring: a DI container in a Lambda
   is cold-start tax). Packaged as a container image on `eclipse-temurin` with the AWS
   runtime interface client as the entrypoint, because no managed Lambda runtime offers
@@ -137,7 +140,19 @@ and `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 - **Postgres/RDS only for data that needs real ACID transactions** (orders, payments,
   users) — do not migrate this data to DynamoDB for consistency's sake; the split
   between DynamoDB (high-contention inventory) and Postgres (transactional records)
-  is deliberate.
+  is deliberate. The invariants that justify it are declared as *constraints*, not
+  application checks: a unique idempotency key on orders and on payments, and the partial
+  unique index `ux_payments_one_live_per_order` permitting at most one PENDING-or-CAPTURED
+  payment per order. Do not replace these with service-layer guards — they have to hold
+  against every writer, including one that does not exist yet.
+- **Never call a payment gateway inside a database transaction.** The attempt row is
+  committed first, the gateway is called with nothing held, and the outcome is written in a
+  second transaction. Holding a connection across a provider's latency turns their outage
+  into connection-pool exhaustion here; writing only on success would leave a charge that
+  moved money with no row to prove it.
+- **Idempotency is checked before state.** A replayed charge must return its original
+  answer even once the order is terminal — checking payability first turns every retry of
+  a successful charge into an error, which is the exact case the key exists to handle.
 - **WAF in front of the purchase endpoint** specifically for anti-scalping/bot
   protection — this is a functional requirement of the domain, not generic hardening.
 
