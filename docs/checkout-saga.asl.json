@@ -1,0 +1,195 @@
+{
+  "Comment": "Checkout saga: hold seat -> create order -> charge -> confirm -> enqueue issuance -> notify, with seat release as compensation. JSONata query language.",
+  "QueryLanguage": "JSONata",
+  "StartAt": "HoldSeat",
+  "States": {
+
+    "HoldSeat": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $states.input.inventoryBaseUrl & '/events/' & $states.input.eventId & '/seats/' & $states.input.seatId & '/hold' %}",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" }
+      },
+      "Assign": {
+        "req": "{% $states.input %}",
+        "holdId": "{% $states.result.ResponseBody.holdId %}"
+      },
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "SeatUnavailable" }],
+      "Next": "CreateOrder"
+    },
+
+    "CreateOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.checkoutBaseUrl & '/orders' %}",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" },
+        "Headers": { "Content-Type": "application/json" },
+        "RequestBody": {
+          "eventId": "{% $req.eventId %}",
+          "customerRef": "{% $req.customerRef %}",
+          "amountCents": "{% $req.amountCents %}",
+          "idempotencyKey": "{% $req.orderKey %}",
+          "seats": "{% [ { 'seatId': $req.seatId, 'holdId': $holdId } ] %}"
+        }
+      },
+      "Assign": { "orderId": "{% $states.result.ResponseBody.id %}" },
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ReleaseSeat" }],
+      "Next": "ChargePayment"
+    },
+
+    "ChargePayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.checkoutBaseUrl & '/orders/' & $orderId & '/payment' %}",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" },
+        "Headers": { "Content-Type": "application/json" },
+        "RequestBody": {
+          "idempotencyKey": "{% $req.paymentKey %}",
+          "paymentToken": "{% $req.paymentToken %}"
+        }
+      },
+      "Assign": { "payment": "{% $states.result.ResponseBody %}" },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 3,
+        "BackoffRate": 2.0
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ReleaseSeat" }],
+      "Next": "PaymentCaptured"
+    },
+
+    "PaymentCaptured": {
+      "Type": "Choice",
+      "Choices": [{
+        "Condition": "{% $payment.paymentStatus = 'CAPTURED' %}",
+        "Next": "ConfirmPurchase"
+      }],
+      "Default": "ReleaseSeat"
+    },
+
+    "ConfirmPurchase": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.inventoryBaseUrl & '/events/' & $req.eventId & '/seats/' & $req.seatId & '/purchase' %}",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" },
+        "Headers": { "Content-Type": "application/json" },
+        "RequestBody": { "holdId": "{% $holdId %}" }
+      },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 4,
+        "BackoffRate": 2.0
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PaidButNotConfirmed" }],
+      "Next": "EnqueueTicketIssuance"
+    },
+
+    "EnqueueTicketIssuance": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Arguments": {
+        "QueueUrl": "__QUEUE_URL__",
+        "MessageBody": {
+          "orderId": "{% $orderId %}",
+          "eventId": "{% $req.eventId %}",
+          "seatId": "{% $req.seatId %}",
+          "customerRef": "{% $req.customerRef %}",
+          "gatewayRef": "{% $payment.gatewayRef %}",
+          "amountCents": "{% $req.amountCents %}"
+        }
+      },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 4,
+        "BackoffRate": 2.0
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PaidButNotIssued" }],
+      "Next": "NotifyPurchaseConfirmed"
+    },
+
+    "NotifyPurchaseConfirmed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "__TOPIC_ARN__",
+        "Subject": "Ticket purchase confirmed",
+        "Message": "{% 'Order ' & $orderId & ' confirmed: seat ' & $req.seatId & ' for event ' & $req.eventId %}"
+      },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 3,
+        "BackoffRate": 2.0
+      }],
+      "Next": "Succeeded"
+    },
+
+    "Succeeded": {
+      "Type": "Succeed",
+      "Output": {
+        "orderId": "{% $orderId %}",
+        "seatId": "{% $req.seatId %}",
+        "gatewayRef": "{% $payment.gatewayRef %}"
+      }
+    },
+
+    "ReleaseSeat": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.inventoryBaseUrl & '/events/' & $req.eventId & '/seats/' & $req.seatId & '/hold/' & $holdId %}",
+        "Method": "DELETE",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" }
+      },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 2,
+        "MaxAttempts": 4,
+        "BackoffRate": 2.0
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "CompensationFailed" }],
+      "Next": "PaymentFailed"
+    },
+
+    "SeatUnavailable": {
+      "Type": "Fail",
+      "Error": "SeatUnavailable",
+      "Cause": "The seat could not be held; nothing was reserved so there is nothing to compensate."
+    },
+
+    "PaymentFailed": {
+      "Type": "Fail",
+      "Error": "PaymentFailed",
+      "Cause": "Payment was not captured. The seat hold has been released."
+    },
+
+    "CompensationFailed": {
+      "Type": "Fail",
+      "Error": "CompensationFailed",
+      "Cause": "Payment failed AND the seat could not be released. The hold TTL and the cleanup Lambda are the backstop."
+    },
+
+    "PaidButNotConfirmed": {
+      "Type": "Fail",
+      "Error": "PaidButNotConfirmed",
+      "Cause": "Money moved but the seat was not marked SOLD. Do NOT release the seat - the compensating action here is a refund, not a release."
+    },
+
+    "PaidButNotIssued": {
+      "Type": "Fail",
+      "Error": "PaidButNotIssued",
+      "Cause": "Money moved and the seat is SOLD, but the issuance message was not enqueued. Replay from this point; do not re-charge."
+    }
+  }
+}

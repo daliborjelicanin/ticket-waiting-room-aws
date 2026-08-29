@@ -86,11 +86,31 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       committed ones, so a crash mid-charge leaves a recoverable PENDING row rather than an
       untracked charge. **50 concurrent charges with distinct keys on one order → 1×200,
       49×409, exactly one CAPTURED row, gateway invoked once** (2026-08-23)
-- [ ] RDS Postgres `db.t4g.micro` single-AZ; Secrets Manager for credentials
-- [ ] Step Functions state machine: hold seats → charge → issue tickets → notify,
-      with compensation (release holds) on payment failure
-- [ ] SQS queue decoupling payment-confirmed → ticket issuance
-- [ ] Verify both paths: happy path and payment-failure → seats released
+- [x] RDS Postgres `db.t4g.micro` single-AZ; Secrets Manager for credentials
+      — see `runbook-checkout-rds.md`. RDS-managed master password (`rds!db-…`), fetched by
+      the *execution* role before the container starts, so the service still needs no task
+      role. **30 concurrent charges with distinct keys on one order → 1×200, 29×409, exactly
+      one CAPTURED row**; replay of a settled key returned the original `gatewayRef`;
+      decline path left `FAILED`/`DECLINED`. Invariant re-checked in SQL against the real
+      instance: 0 orders with >1 live payment, 0 CAPTURED payments whose order isn't PAID
+      (2026-08-27)
+- [x] Step Functions state machine: hold seats → charge → issue tickets → notify,
+      with compensation (release holds) on payment failure — see `runbook-checkout-saga.md`.
+      A declined card is HTTP **200**, so compensation hangs off a **Choice** on
+      `paymentStatus`, not off `Catch`; `Catch` handles only transport failures. Five
+      distinct failure states, because after capture the compensating action is a refund,
+      not a seat release (2026-08-27)
+- [x] SQS queue decoupling payment-confirmed → ticket issuance — `ticket-issuance-queue`,
+      Standard (issuance is idempotent on `orderId`). DLQ deferred to slice 5 with the
+      consumer (2026-08-27)
+- [x] Verify both paths: happy path and payment-failure → seats released
+      — **happy:** `HoldSeat→CreateOrder→ChargePayment→PaymentCaptured→ConfirmPurchase→
+      EnqueueTicketIssuance→NotifyPurchaseConfirmed→Succeeded`, seat **SOLD** with TTL
+      cleared, issuance message on the queue, order PAID/CAPTURED.
+      **compensation:** `…→PaymentCaptured→ReleaseSeat→PaymentFailed`, seat back to
+      **AVAILABLE** with `holdId` cleared, **no** message enqueued, order FAILED/DECLINED.
+      `ChargePayment` shows *succeeded* in both — proving the Choice routed the failure,
+      not a Catch (2026-08-27)
 - **Teardown:** stop/delete RDS (keep final snapshot), delete ECS service
 - **Learn:** Step Functions, saga compensation, Secrets Manager, SQS
 
