@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -100,10 +99,5 @@ public class CheckoutService {
                 .orElseThrow(() -> new OrderNotFoundException("No order " + orderId));
         order.markCancelled(clock.instant());
         return order;
-    }
-
-    /** The instant used for every timestamp written here, so tests can pin it. */
-    public Instant now() {
-        return clock.instant();
     }
 }

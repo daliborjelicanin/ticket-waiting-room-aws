@@ -3,12 +3,13 @@ springBoot = "4.1.0"
 awsSdk = "2.46.21"
 awsLambdaCore = "1.4.0"
 awsLambdaRic = "2.8.3"
+awsLambdaEvents = "3.16.1"
 junit = "6.1.1"
 testcontainers = "2.0.5"
 assertj = "3.27.7"
 mockito = "5.20.0"
 lombok = "1.18.38"
-foojayResolver = "1.0.0"
+zxing = "3.5.3"
 
 [libraries]
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
@@ -16,16 +17,17 @@ spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-star
 spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis", version.ref = "springBoot" }
 spring-boot-starter-data-jpa = { module = "org.springframework.boot:spring-boot-starter-data-jpa", version.ref = "springBoot" }
 spring-boot-flyway = { module = "org.springframework.boot:spring-boot-flyway", version.ref = "springBoot" }
-flyway-core = { module = "org.flywaydb:flyway-core" }
 flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql" }
 postgresql = { module = "org.postgresql:postgresql" }
 aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awsSdk" }
 aws-sdk-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
 aws-sdk-sqs = { module = "software.amazon.awssdk:sqs" }
-aws-sdk-sns = { module = "software.amazon.awssdk:sns" }
+aws-sdk-s3 = { module = "software.amazon.awssdk:s3" }
+aws-sdk-sesv2 = { module = "software.amazon.awssdk:sesv2" }
 aws-sdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client" }
 aws-lambda-core = { module = "com.amazonaws:aws-lambda-java-core", version.ref = "awsLambdaCore" }
 aws-lambda-ric = { module = "com.amazonaws:aws-lambda-java-runtime-interface-client", version.ref = "awsLambdaRic" }
+aws-lambda-events = { module = "com.amazonaws:aws-lambda-java-events", version.ref = "awsLambdaEvents" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
@@ -35,6 +37,12 @@ testcontainers-localstack = { module = "org.testcontainers:testcontainers-locals
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+# core only, never javase: MatrixToImageWriter is a dozen lines of BufferedImage/ImageIO,
+# and javase pulls jai-imageio-core into a Lambda image that pays for every class it loads.
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+# Test-only: BufferedImageLuminanceSource is what lets a test decode the PNG it just
+# rendered. Never a runtime dependency of the Lambda — that is the whole point.
+zxing-javase = { module = "com.google.zxing:javase", version.ref = "zxing" }
 
 [bundles]
 testing = ["junit-jupiter", "assertj-core", "mockito-core"]

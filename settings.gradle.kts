@@ -12,4 +12,5 @@ include(
     "ticket-issuance-service",
     "notification-service",
     "hold-cleanup-lambda",
+    "qr-generation-lambda",
 )

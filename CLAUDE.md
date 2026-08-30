@@ -23,6 +23,14 @@ or infra format — the same logical architecture is intentionally rebuilt acros
 slice-based, teardown-after-every-session) lives in `docs/phase1-plan.md` — consult it
 for what to build next and keep its checkboxes up to date as slices complete.
 
+**Diagrams.** `docs/architecture.md` holds the system-level picture — topology, the
+end-to-end purchase sequence, the saga state machine, the seat lifecycle, and the async
+edges — and each module has an `ARCHITECTURE.md` beside its code with that module's
+internals. They are Mermaid, so they render in IntelliJ and on GitHub and diff as text.
+Keep them true to the code: a diagram that describes the plan rather than what is built
+is worse than none, so update the module's `ARCHITECTURE.md` in the same change that
+alters its behaviour, and mark not-yet-built boxes as such.
+
 ## Tech Stack
 
 - Language: Java (JDK 26 / `openjdk-26`)
@@ -38,11 +46,16 @@ for what to build next and keep its checkboxes up to date as slices complete.
 
 ### Modules
 
-- `common` — plain `java-library`, shared event/message DTOs (SQS/SNS/EventBridge
+- `common` — `java-library`, shared event/message DTOs (SQS/SNS/EventBridge
   contracts), exception types, and cross-deployable data contracts such as
   `SeatTableSchema` (the DynamoDB attribute names shared by every writer of the
-  seat table). No dependency on any service module; services depend on it, never
-  the reverse.
+  seat table) and `TicketQrObjects` (the S3 key shared by the writer and reader of
+  a ticket QR). It also owns `SqsMessagePump`, the long-poll consumer loop, because
+  two deployables consume queues and both must have identical at-least-once
+  semantics. `aws-sdk-sqs` is therefore a **`compileOnly`** dependency here and is
+  declared again by the services that use the pump — exporting it put the SDK's
+  Apache 5 and Netty HTTP stacks back into both Lambda images, which had spent
+  slice 2 removing them. Services depend on `common`, never the reverse.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.
@@ -51,12 +64,20 @@ for what to build next and keep its checkboxes up to date as slices complete.
   operation must be one atomic round trip, so the reasoning lives next to the commands.
   `checkout-payment-service` owns the Postgres schema in Flyway migrations under
   `src/main/resources/db/migration`, with `ddl-auto: validate` so entity drift fails at
-  startup instead of silently altering a live table.
-- `hold-cleanup-lambda` — plain `java-library` (no Spring: a DI container in a Lambda
-  is cold-start tax). Packaged as a container image on `eclipse-temurin` with the AWS
-  runtime interface client as the entrypoint, because no managed Lambda runtime offers
-  JDK 26. `./gradlew :hold-cleanup-lambda:build` stages the deployment package into
-  `build/lambda/lib` for the Docker build. See `docs/runbook-hold-cleanup.md`.
+  startup instead of silently altering a live table. `ticket-issuance-service` does the
+  same for a *separate* `ticketing` database on the same RDS instance — separate bounded
+  context, separate Flyway history, and deliberately no foreign key across the two.
+  `notification-service` sends through a `NotificationSender` interface with SES and
+  logging implementations, the same split as `PaymentGateway`/`MockPaymentGateway`.
+- `hold-cleanup-lambda`, `qr-generation-lambda` — plain `java` modules (no Spring: a DI
+  container in a Lambda is cold-start tax). Each is packaged as a container image on
+  `eclipse-temurin` with the AWS runtime interface client as the entrypoint, because no
+  managed Lambda runtime offers JDK 26, and each excludes the AWS SDK's Apache 5 and
+  Netty HTTP stacks in favour of `url-connection-client` — the single biggest lever on
+  Lambda's separate 10s INIT budget. `./gradlew :<module>:build` stages the deployment
+  package into `build/lambda/lib` for the Docker build. `qr-generation-lambda` parses no
+  JSON at all (its SQS body is a bare ticket id) for the same reason. See
+  `docs/runbook-hold-cleanup.md` and `docs/runbook-qr-generation.md`.
 
 ### Build Commands
 
@@ -65,13 +86,14 @@ for what to build next and keep its checkboxes up to date as slices complete.
 - `./gradlew :waiting-room-service:bootRun` — run a single service (swap module name)
 - `./gradlew projects` — list all modules
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
-  module's dependency tree (useful for checking `common` stays dependency-free)
+  module's dependency tree (useful for checking a Lambda module's classpath has not
+  quietly regrown the HTTP stacks its cold start cannot afford)
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-further Lambda modules (QR generation, WebSocket connect/disconnect), Jib/
-`bootBuildImage` config, Terraform, CI workflow files. Docker packaging is
-hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service)
-and `hold-cleanup-lambda/Dockerfile` (Lambda container image).
+WebSocket connect/disconnect Lambdas, Jib/`bootBuildImage` config, Terraform, CI
+workflow files. Docker packaging is hand-written per module — see
+`seat-inventory-service/Dockerfile` (Fargate service) and
+`hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
 ## AWS Services by Category
 
@@ -153,6 +175,18 @@ and `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 - **Idempotency is checked before state.** A replayed charge must return its original
   answer even once the order is terminal — checking payability first turns every retry of
   a successful charge into an error, which is the exact case the key exists to handle.
+- **Ticket issuance is idempotent on a database constraint**, not on a
+  read-then-write check. SQS Standard is at-least-once and the saga retries its enqueue,
+  so duplicate delivery is ordinary operation rather than an edge case; `UNIQUE
+  (order_id, seat_id)` on `tickets` is what makes twenty concurrent deliveries produce
+  one ticket. Do not replace it with a `findByOrderIdAndSeatId` guard.
+- **A consumer deletes an SQS message only after its handler returns.** Deleting on
+  receipt turns the queue into an at-most-once channel; a thrown handler leaves the
+  message for the visibility timeout and, eventually, the DLQ. Every handler is therefore
+  required to be idempotent.
+- **QR generation is idempotent by construction, not by guard** — the S3 key is derived
+  from the ticket id and the renderer is pure, so a redelivered message rewrites identical
+  bytes. Do not add a conditional put or a dedupe table to "fix" a duplicate render.
 - **WAF in front of the purchase endpoint** specifically for anti-scalping/bot
   protection — this is a functional requirement of the domain, not generic hardening.
 

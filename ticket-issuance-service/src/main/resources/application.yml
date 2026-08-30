@@ -1,3 +1,38 @@
 spring:
   application:
     name: ticket-issuance-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ticketing}
+    username: ${DB_USERNAME:ticketing}
+    password: ${DB_PASSWORD:ticketing}
+  jpa:
+    hibernate:
+      # Flyway owns the schema. `validate` turns a drifted entity mapping into a startup
+      # failure instead of a silent ALTER against a live table.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+
+aws:
+  region: ${AWS_REGION:eu-central-1}
+  # Set only against LocalStack; unset in the cloud so the SDK uses its own endpoints and
+  # the default credentials chain (i.e. the ECS task role).
+  sqs:
+    endpoint: ${AWS_SQS_ENDPOINT:}
+  s3:
+    endpoint: ${AWS_S3_ENDPOINT:}
+
+ticket-issuance:
+  issuance-queue-url: ${ISSUANCE_QUEUE_URL:}
+  qr-queue-url: ${QR_QUEUE_URL:}
+  qr-bucket: ${QR_BUCKET:}
+  # Short on purpose: a QR download link is for the customer holding the page open now, not
+  # a URL to be forwarded. It also cannot outlive the task role's credentials anyway.
+  qr-url-ttl: PT15M
+  consumer:
+    # Off in tests and in any context that only wants the HTTP surface.
+    enabled: ${ISSUANCE_CONSUMER_ENABLED:true}
+    threads: 2
+    batch-size: 10
+    poll-wait: PT20S

@@ -1,3 +1,29 @@
 spring:
   application:
     name: notification-service
+
+aws:
+  region: ${AWS_REGION:eu-central-1}
+  # Set only against LocalStack; unset in the cloud so the SDK uses its own endpoints and
+  # the default credentials chain (i.e. the ECS task role).
+  sqs:
+    endpoint: ${AWS_SQS_ENDPOINT:}
+  ses:
+    endpoint: ${AWS_SES_ENDPOINT:}
+
+notification:
+  queue-url: ${NOTIFICATION_QUEUE_URL:}
+  # `logging` writes the rendered email to the log instead of sending it — the local and
+  # test default, mirroring the checkout service's mock payment gateway.
+  sender: ${NOTIFICATION_SENDER:logging}
+  from-address: ${NOTIFICATION_FROM:}
+  # SES in sandbox will only deliver to verified identities, and customerRef is an opaque
+  # customer reference rather than an address, so mail goes here unless the reference is
+  # itself an email. See runbook-notifications.md.
+  fallback-recipient: ${NOTIFICATION_TO:}
+  ticket-base-url: ${TICKET_BASE_URL:http://localhost:8080}
+  consumer:
+    enabled: ${NOTIFICATION_CONSUMER_ENABLED:true}
+    threads: 1
+    batch-size: 10
+    poll-wait: PT20S

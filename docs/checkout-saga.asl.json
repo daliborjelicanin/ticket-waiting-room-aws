@@ -124,7 +124,7 @@
       "Arguments": {
         "TopicArn": "__TOPIC_ARN__",
         "Subject": "Ticket purchase confirmed",
-        "Message": "{% 'Order ' & $orderId & ' confirmed: seat ' & $req.seatId & ' for event ' & $req.eventId %}"
+        "Message": "{% $string({ 'orderId': $orderId, 'eventId': $req.eventId, 'seatId': $req.seatId, 'customerRef': $req.customerRef, 'gatewayRef': $payment.gatewayRef, 'amountCents': $req.amountCents }) %}"
       },
       "Retry": [{
         "ErrorEquals": ["States.ALL"],

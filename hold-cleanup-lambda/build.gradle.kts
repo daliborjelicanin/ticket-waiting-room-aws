@@ -11,15 +11,8 @@ dependencies {
 
     implementation(platform(libs.aws.sdk.bom))
 
-    // Lambda charges cold-start time for every class it loads, and the SDK's default HTTP
-    // stacks are the biggest contributor: Apache 5 for sync calls and Netty for async,
-    // 15 jars between them, none of which this function needs. url-connection-client is a
-    // thin wrapper over the JDK's own HttpURLConnection with no transitive dependencies.
-    // Dropping the other two is what keeps initialisation inside Lambda's 10s INIT budget.
-    implementation(libs.aws.sdk.dynamodb) {
-        exclude(group = "software.amazon.awssdk", module = "apache5-client")
-        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
-    }
+    // See the configurations.all block below for why this has no per-dependency exclusions.
+    implementation(libs.aws.sdk.dynamodb)
     implementation(libs.aws.sdk.url.connection.client)
 
     // The runtime interface client is what lets a plain JDK base image speak Lambda's
@@ -35,6 +28,22 @@ dependencies {
     testImplementation(platform(libs.testcontainers.bom))
     testImplementation(libs.testcontainers.localstack)
     testImplementation(libs.testcontainers.junit.jupiter)
+}
+
+// The two HTTP stacks the AWS SDK pulls in by default — Apache 5 for sync calls, Netty for
+// async, 12 jars between them — are the single biggest contributor to Lambda's separate 10s
+// INIT budget, and this function uses neither: url-connection-client below is a thin wrapper
+// over the JDK's own HttpURLConnection with no transitive dependencies. Slice 2 measured the
+// difference at 9999 ms -> 3411 ms.
+//
+// Excluded at the configuration level rather than on the one dependency that happened to
+// bring them. A per-dependency exclude only holds until some *other* dependency pulls them
+// back in, which is exactly what happened when :common briefly exported the SQS SDK: the
+// exclude on the DynamoDB/S3 dependency was still there, still correct, and completely
+// bypassed. The constraint is a property of the image, so it is stated once for the module.
+configurations.all {
+    exclude(group = "software.amazon.awssdk", module = "apache5-client")
+    exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
 }
 
 // Stages the deployment package as a flat directory of jars.

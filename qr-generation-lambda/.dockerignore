@@ -1,0 +1,5 @@
+# Ship only the staged deployment package into the build context — the flat lib/
+# directory the stageLambdaLib task produces. Everything else in the module is
+# source Docker has no use for.
+**
+!build/lambda/lib/

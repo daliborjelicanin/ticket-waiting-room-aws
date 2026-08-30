@@ -115,8 +115,32 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - **Learn:** Step Functions, saga compensation, Secrets Manager, SQS
 
 ### 5. Ticket Issuance + Notification — $0 standing
-- [ ] Code: issuance service consumes SQS, persists tickets, QR-generation Lambda → S3
-- [ ] SNS topic fan-out for purchase confirmation; notification service (email via SNS/SES sandbox)
+- [x] Code: issuance service consumes SQS, persists tickets, QR-generation Lambda → S3
+      — the consumer's idempotency is a **unique constraint**, not a check: SQS Standard is
+      at-least-once and the saga retries its enqueue, so duplicate delivery is ordinary
+      operation. `uq_tickets_order_seat` is what makes it survive. Tickets live in a separate
+      `ticketing` database on the same RDS instance (separate bounded context, no FK across
+      the two). The pump deletes a message only after its handler returns, so a failure is
+      redelivered and eventually redriven — which is also the repair path for the
+      non-atomic insert-then-enqueue. QR generation is idempotent *by construction*: a
+      deterministic S3 key plus a pure renderer, so a redelivery rewrites identical bytes and
+      needs no guard. **20 concurrent deliveries of one purchase → 1 ticket, 19 duplicates,
+      all resolving to the same ticket id; 4 queued copies → 1 ticket, queue drained**
+      (Testcontainers Postgres + LocalStack, 2026-08-29)
+- [ ] AWS: `ticketing` database, DLQs on both queues, S3 bucket (SSE-KMS with the AWS-managed
+      key, 7-day lifecycle), `qr-generation` Lambda with `ReportBatchItemFailures`, two ECS
+      services + task roles — see `runbook-ticket-issuance.md` and `runbook-qr-generation.md`
+- [x] SNS topic fan-out for purchase confirmation; notification service (email via SNS/SES sandbox)
+      — the topic gains a second subscriber (an SQS queue) beside the email subscription it
+      has had since slice 4, which is the fan-out that justifies SNS being here at all. The
+      SQS subscription needs **raw message delivery ON**, or every field arrives null and the
+      service reports success. `NotifyPurchaseConfirmed` now publishes JSON via JSONata
+      `$string()` instead of prose; a contract test pins those field names to the record.
+      A duplicate delivery sends a duplicate email — SES has no idempotency key, and that is
+      recorded as a conscious omission rather than hidden behind an in-memory guard
+      (2026-08-29)
+- [ ] AWS: notifications queue + DLQ, SNS subscription with raw delivery, SES sandbox
+      identities — see `runbook-notifications.md`
 - [ ] Verify full purchase flow end-to-end
 - **Learn:** SQS consumers, SNS fan-out, S3 presigned URLs
 
