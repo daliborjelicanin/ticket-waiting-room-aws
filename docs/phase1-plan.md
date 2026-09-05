@@ -173,8 +173,15 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       `runbook-notifications.md` (2026-09-05)
 - **Learn:** SQS consumers, SNS fan-out, S3 presigned URLs
 
-### 6. Edge & auth — ALB/WAF session-only (~$0.03/hr combined)
-- [ ] ALB in front of the REST services; API Gateway (REST) → ALB
+### 6. Edge & auth — ALB/WAF session-only (ALB ~$0.037/hr, WAF billed monthly)
+- [x] ALB in front of the REST services; API Gateway (REST) → ALB — see
+      `runbook-alb-apigateway.md`. REST APIs can only VPC-Link to an **NLB**, so the ALB is
+      internet-facing and every listener rule requires a secret header that API Gateway
+      injects; the default action is a hard 403. Path rules are priority-ordered because
+      `/orders/*/tickets` is a subset of `/orders/*`. **30 concurrent holds on one seat
+      through APIGW → ALB → Fargate → DynamoDB → 1×201, 29×409**, one holdId in the table
+      — identical to slice 1 against a raw task IP, so the edge changed the address and not
+      the guarantee (2026-09-05)
 - [ ] API Gateway (WebSocket) + connect/disconnect Lambdas → live queue position
 - [ ] Cognito user pool + guest checkout flow
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
