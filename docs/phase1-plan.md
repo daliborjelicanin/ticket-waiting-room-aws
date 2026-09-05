@@ -127,9 +127,18 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       needs no guard. **20 concurrent deliveries of one purchase → 1 ticket, 19 duplicates,
       all resolving to the same ticket id; 4 queued copies → 1 ticket, queue drained**
       (Testcontainers Postgres + LocalStack, 2026-08-29)
-- [ ] AWS: `ticketing` database, DLQs on both queues, S3 bucket (SSE-KMS with the AWS-managed
+- [x] AWS: `ticketing` database, DLQs on both queues, S3 bucket (SSE-KMS with the AWS-managed
       key, 7-day lifecycle), `qr-generation` Lambda with `ReportBatchItemFailures`, two ECS
       services + task roles — see `runbook-ticket-issuance.md` and `runbook-qr-generation.md`
+      — built, then **rebuilt from a cold account on 2026-09-05**, which is what proved the
+      teardown cycle rather than assuming it. Everything in the free tier survived; what is
+      minted fresh every cycle is the `rds!db-…` secret ARN, the EventBridge connection UUID,
+      the task public IPs and the security-group rule ids. The RDS *endpoint hostname* is
+      stable, which is the trap: `DB_URL` still looks right while every `valueFrom` beside it
+      is stale. Two queue visibility timeouts were corrected against the runbooks —
+      `qr-generation-queue` 60s → **360s** (six times the function timeout, per AWS's event
+      source mapping guidance) and `purchase-confirmed-notifications` 30s → **120s** (the SES
+      sandbox sends 1/sec, so a batch of 10 needs ≥10s before any retry) (2026-09-05)
 - [x] SNS topic fan-out for purchase confirmation; notification service (email via SNS/SES sandbox)
       — the topic gains a second subscriber (an SQS queue) beside the email subscription it
       has had since slice 4, which is the fan-out that justifies SNS being here at all. The
@@ -139,9 +148,29 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       A duplicate delivery sends a duplicate email — SES has no idempotency key, and that is
       recorded as a conscious omission rather than hidden behind an in-memory guard
       (2026-08-29)
-- [ ] AWS: notifications queue + DLQ, SNS subscription with raw delivery, SES sandbox
+- [x] AWS: notifications queue + DLQ, SNS subscription with raw delivery, SES sandbox
       identities — see `runbook-notifications.md`
-- [ ] Verify full purchase flow end-to-end
+      — fan-out confirmed: both subscribers fired, `AWS/SES` reported `Send: 1` / `Delivery: 1`,
+      and raw delivery was proven by every field of `PurchaseConfirmedEvent` arriving populated.
+      **Only one mail reaches the inbox, and it is not a bug in this service:** SES cannot pass
+      DMARC for a `gmail.com` `From` address (SPF fails, DKIM signs as `amazonses.com` and does
+      not align), so Gmail accepts it and files it as spam. Verifying an *address* gates SES
+      acceptance; inbox placement needs a *domain* identity with DKIM published in Route 53.
+      Two different mechanisms, and the sandbox only ever exercises the first (2026-09-05)
+- [x] Verify full purchase flow end-to-end
+      — one saga execution `SUCCEEDED` first attempt through the full graph, with every landing
+      point checked: seat `SOLD` with `holdExpiresAt` removed, order `PAID` / payment `CAPTURED`,
+      one ticket row, queue drained, QR object written, all three DLQs empty. Then the claim
+      that matters, against the real deployment rather than LocalStack: **21 duplicate
+      deliveries — 20 of them fired as two concurrent batches — produced exactly one ticket**,
+      with `issuedAt` unchanged and both consumer threads visibly racing on `SQLState 23505`
+      in the same second. QR cold start **1177 ms** against slice 2's 3411 ms.
+      Two defects found, neither a misconfiguration: **(1)** every QR encodes
+      `GET /tickets/{ticketId}`, which returns 404 — `TicketController` never implemented it,
+      so "the QR scans" is unproven and needs its own slice (it is an authorisation question,
+      not a rendering one); **(2)** the SES deliverability issue above. See the `Results`
+      sections of `runbook-ticket-issuance.md`, `runbook-qr-generation.md` and
+      `runbook-notifications.md` (2026-09-05)
 - **Learn:** SQS consumers, SNS fan-out, S3 presigned URLs
 
 ### 6. Edge & auth — ALB/WAF session-only (~$0.03/hr combined)

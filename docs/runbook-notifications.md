@@ -73,11 +73,27 @@ you have made idempotent, and which you have consciously not, is the point.
 
 ### 1. Queue subscribed to the topic
 
-**SQS → Create queue**, Standard, `purchase-confirmed-notifications`, visibility timeout 30s,
-plus `purchase-confirmed-notifications-dlq` (14-day retention) with maximum receives 3.
+**SQS → Create queue**, Standard, `purchase-confirmed-notifications`, visibility timeout
+**120s**, plus `purchase-confirmed-notifications-dlq` (14-day retention) with maximum
+receives 3.
 
 An SES outage should retry, not discard; three failures across three visibility timeouts is
 a message that needs a human.
+
+**Two minutes, not the 30s an earlier version of this runbook specified.** The arithmetic is
+the SES *sandbox send rate*: 1 message per second, 200 per 24 hours, until production access
+is granted. `SqsMessagePump` receives up to 10 messages in one call and a single consumer
+thread walks them sequentially, deleting each only after its handler returns — but the
+visibility clock started at *receive*, for all ten at once.
+
+So a full batch needs at least 10 seconds of pure send time before any retry, against a
+30-second budget. Overrun it and the tail of the batch becomes visible mid-processing:
+duplicate emails, and receive counts climbing toward the DLQ, for messages that were being
+handled correctly all along. The only cost of 120s is that a genuinely failing message takes
+3 × 2 min to reach the DLQ instead of 90 seconds, which does not matter here.
+
+That 200-a-day quota is also a real ceiling on load-testing this path in slice 7, and
+duplicate deliveries spend it twice.
 
 The queue needs a policy letting SNS write to it — the console offers this when you subscribe
 from the SQS side, but written by hand it is:
@@ -180,8 +196,20 @@ Run a full saga execution and expect **two** deliveries of one event:
 2. A formatted mail from this service, naming the event, seat, order, amount and a link to
    `/orders/{orderId}/tickets`.
 
-Two arriving is the fan-out working. One arriving means the subscription is missing, or the
-service is on the `logging` sender.
+Two arriving is the fan-out working.
+
+**One arriving does not mean one was sent.** Check `AWS/SES`'s `Send` and `Delivery` metrics
+before concluding anything from an inbox — see Results, where both mails were sent and
+delivered and only one appeared. And do not read the service log as evidence either:
+`PurchaseConfirmedConsumer` logs `sent purchase confirmation` through the `NotificationSender`
+interface, so the `logging` sender prints the identical line. CloudWatch is the only thing
+that distinguishes the two.
+
+```bash
+aws cloudwatch get-metric-statistics --namespace AWS/SES --metric-name Send \
+  --start-time <t0> --end-time <t1> --period 3600 --statistics Sum --region eu-central-1
+# repeat for Delivery, Bounce, Reject
+```
 
 ```bash
 aws sqs get-queue-attributes --region eu-central-1 \
@@ -193,9 +221,59 @@ aws sqs get-queue-attributes --region eu-central-1 \
 Then check the DLQ is empty — a message parked there means the payload did not match
 `PurchaseConfirmedEvent`, which is almost always raw message delivery being off.
 
-## Results
+## Results (2026-09-05)
 
-_To be filled in from the AWS session._
+Saga execution `c1-0905-run1`, order `75e15447-1ab2-4db8-8084-9c8272395b45`, seat `S-1`.
+
+### The path works
+
+```
+2026-09-05T11:22:04.033Z  INFO [notification-service] [virtual-37]
+  PurchaseConfirmedConsumer : sent purchase confirmation for order 75e15447-… seat S-1
+```
+
+Two seconds after the saga's `NotifyPurchaseConfirmed`. Queue drained to 0 / 0, DLQ empty,
+raw message delivery confirmed working — every field of `PurchaseConfirmedEvent` populated,
+which is what the envelope would have destroyed.
+
+`AWS/SES` for the window: **`Send: 1`, `Delivery: 1`, no bounce, no reject.**
+
+### Both mails were sent. One arrived.
+
+The SNS subscription's raw-JSON mail landed in the inbox. The formatted SES mail did not —
+and `Delivery: 1` means this is not an SES failure: SES sent it and **Gmail's servers
+accepted it**. Gmail then filed it as spam.
+
+**Why.** The `From` is `jelicanindalibor+tickets@gmail.com` — a `gmail.com` address — arriving
+from Amazon SES:
+
+- **SPF fails** — SES is not in `gmail.com`'s SPF record
+- **DKIM does not align** — SES signs with `amazonses.com`, not `gmail.com`
+- **DMARC therefore fails**
+
+Mail claiming to be from your own address, sent from a third party, is the textbook spoofing
+signature. Gmail is right to distrust it.
+
+**The lesson is about what SES verification actually buys.** Verifying an address is what
+makes SES *accept* the send, and in the sandbox it also gates the recipient. It says nothing
+about inbox placement. Sender verification and domain authentication are different mechanisms,
+and the sandbox only ever exercises the first — so "SES is configured correctly" and "the mail
+arrives" are two claims, and passing the first proves nothing about the second.
+
+**The fix, when it matters:** verify a *domain* identity, let SES publish its DKIM CNAMEs into
+the Route 53 hosted zone this architecture already includes, and send from `tickets@<domain>`.
+DKIM then aligns, DMARC passes, and it lands. That is a slice of work, not a toggle. For a
+demo, marking it *Not spam* once is enough.
+
+Search spam for `Ticket purchase confirmed — seat S-1`; the em-dash distinguishes it from the
+SNS mail's plain `Ticket purchase confirmed`.
+
+### Not tested
+
+The duplicate-email behaviour described under *A Redelivery Sends A Second Email* was not
+exercised — the 21-message burst in `runbook-ticket-issuance.md` replayed the *issuance*
+queue, which is downstream of the notification fan-out. A second confirmation email on
+redelivery remains a reasoned expectation, not a measured one.
 
 ## Teardown
 

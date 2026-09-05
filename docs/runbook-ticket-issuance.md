@@ -208,9 +208,76 @@ SELECT order_id, seat_id, count(*) FROM tickets GROUP BY 1, 2 HAVING count(*) > 
 -- 0 rows
 ```
 
-## Results
+## Results (2026-09-05)
 
-_To be filled in from the AWS session._
+Order `75e15447-1ab2-4db8-8084-9c8272395b45`, ticket `fbd49307-774b-4945-8fbc-526e2cd30e5c`,
+seat `S-1` of `evt-c1-0905`.
+
+### First delivery
+
+```
+11:22:03.892  INFO [virtual-42] TicketIssuanceConsumer :
+  issued ticket fbd49307-… for order 75e15447-… seat S-1
+```
+
+Flyway created the schema on first start against the `ticketing` database — `Successfully
+applied 1 migration to schema "public", now at version v1` — and the pump came up on the
+full queue URL with two consumer threads. QR object landed at 11:22:08, unattended.
+
+### The constraint under a real race — 21 deliveries, one ticket
+
+`TicketIssuanceIT` proves this against LocalStack. This is the same claim against the real
+deployment: one replay, then **20 more sent as two concurrent `send-message-batch` calls**,
+so the copies arrive together rather than in sequence. A sequential replay does not test a
+race, and the claim being made here is about one.
+
+| Check | Result |
+|---|---|
+| `GET /orders/{orderId}/tickets` | **count = 1** |
+| `issuedAt` | `11:22:02.627267Z` — unchanged; the original row was never rewritten |
+| `SELECT order_id, seat_id, count(*) … HAVING count(*) > 1` | **0 rows** |
+| `SELECT count(*) FROM tickets` | **1** |
+| `ticket-issuance-dlq` | **0** |
+
+The race is visible in the log — `virtual-40` and `virtual-42` are the two consumer threads,
+interleaved inside the same second:
+
+```
+11:44:37.001  virtual-42  duplicate delivery for order 75e15447-… seat S-1 —
+                          ticket fbd49307-… already issued
+11:44:37.002  virtual-40  HHH000247: ErrorCode: 0, SQLState: 23505
+11:44:37.003  virtual-40  ERROR: duplicate key value violates unique constraint
+                          "uq_tickets_order_seat"
+              Detail: Key (order_id, seat_id)=(75e15447-…, S-1) already exists.
+11:44:37.097  virtual-42  HHH000247: ErrorCode: 0, SQLState: 23505
+```
+
+Both threads attempted the insert concurrently, both were refused by the constraint, both
+reported the ticket already issued, and both deleted their message. **`23505` being raised
+twenty times is not a failure — it is the mechanism.** A `findByOrderIdAndSeatId` guard would
+have let both threads through the window between the read and the write.
+
+### Nothing reached a DLQ, and that is the subtle part
+
+Twenty-one messages whose inserts all failed, and `ticket-issuance-dlq` stayed at 0. The
+handler treats a constraint violation as success and deletes the message — which is the
+correct reading of "already issued", and the reason the DLQ stays meaningful: anything that
+does land there is a real failure, not a duplicate.
+
+### The `AlreadyIssued` branch is a recovery path — confirmed
+
+Every duplicate re-issued its QR request, and the S3 object was rewritten with byte-identical
+content (same key, same 1205 bytes, new timestamp). That is `qrDispatcher.requestQr` sitting
+outside the switch, doing exactly what the *Concurrency Bit* section says it is there for.
+
+The honest cost is 21 renders for one ticket — real Lambda invocations, and at scale you would
+notice. The alternative is a guard this design deliberately rejects, so it is a chosen trade.
+
+### Caveat
+
+The 30s visibility timeout was never stressed: every handler returned in milliseconds, so the
+"a restarting database puts every in-flight message in the DLQ" warning under *DLQ and redrive*
+remains reasoned rather than measured.
 
 ## Teardown
 

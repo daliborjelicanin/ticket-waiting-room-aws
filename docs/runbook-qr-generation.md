@@ -135,6 +135,20 @@ startup — an error that names KMS while the obvious suspect is the bucket poli
 | Batch size | 10 |
 | Batch window | 0 |
 | **Report batch item failures** | **ON** — see above |
+| Maximum concurrency | leave empty — setting it disables Lambda's scale-down-to-two poller optimisation, so the one field that reads like a cost control raises the idle cost |
+
+The queue's **visibility timeout must be 360s, not 60s** — an earlier version of this runbook
+said 60. AWS is explicit for event source mappings: set the source queue's visibility timeout
+to at least *six times* the function timeout, and this function's timeout is 60s.
+
+Sixty passes validation, because Lambda only rejects a function timeout *greater* than the
+visibility timeout, so nothing tells you it is wrong. What it costs is headroom: a throttled
+or slow invoke lets the message reappear while the first is still rendering. The duplicate
+render is harmless — the key is deterministic and the renderer pure — but every redelivery
+increments the receive count, and enough of them push a message that *succeeded* into the DLQ.
+
+For the same reason `maxReceiveCount` here is **5**, not the 3 used elsewhere: a throttled
+invoke consumes a receive without the message ever being processed.
 
 ## Test The Image Before Pushing
 
@@ -166,23 +180,98 @@ the number appears.
 ```bash
 aws s3 ls s3://ticket-qr-<account-id>-eu-central-1/tickets/
 aws s3 cp s3://ticket-qr-<account-id>-eu-central-1/tickets/<ticketId>.png /tmp/qr.png
-xdg-open /tmp/qr.png     # scan it with a phone: it must open the verification URL
 ```
+
+**Decode the payload rather than only looking at the image.** Confirming that an object was
+written is a different test from confirming what it encodes, and only the first was ever run
+before 2026-09-05 — which is how a QR pointing at a non-existent endpoint survived a full
+Phase A sign-off. There is no decoder on the dev box; borrow one:
+
+```bash
+docker run --rm -v /tmp:/d debian:stable-slim sh -c \
+  'apt-get update -qq && apt-get install -y -qq zbar-tools && zbarimg -q --raw /d/qr.png'
+# -> https://<issuance-api>.execute-api.eu-central-1.amazonaws.com/tickets/<ticketId>
+```
+
+Then curl whatever comes back. It must not 404 — see Results.
 
 Then via the service, which is the path a customer takes:
 
 ```bash
-curl -s http://<issuance-ip>:8080/tickets/<ticketId>/qr | jq
+curl -s https://<issuance-api>.execute-api.eu-central-1.amazonaws.com/tickets/<ticketId>/qr | jq
 # -> {"status":"READY","url":"https://...X-Amz-Signature=...","expiresAt":"..."}
 ```
 
 Open that URL in a browser. It must render inline rather than download — that is the
 `Content-Type: image/png` on the put, without which S3 serves `application/octet-stream`.
 
-## Results
+## Results (2026-09-05)
 
-_To be filled in from the AWS session. Record the `INIT_REPORT Init Duration` — the number
-to beat is slice 2's 3411 ms against a 10s budget._
+Run against the rebuilt stack, ticket `fbd49307-774b-4945-8fbc-526e2cd30e5c`.
+
+### Cold start — comfortably inside budget
+
+Four cold starts, not one: the idempotency burst in `runbook-ticket-issuance.md` scaled the
+function out to four execution environments, which gave a spread instead of a single sample.
+
+| Init Duration | |
+|---|---|
+| 2566.40 ms | first, cold host |
+| 2458.16 ms | |
+| 1457.44 ms | |
+| **1177.70 ms** | best |
+
+Against slice 2's **3411 ms** and the 10-second INIT budget: the best is a **65% improvement**,
+the worst still 25%. The spread is the container image cache warming on the host — the first
+environment pays for the layers, later ones do not. Worth knowing before quoting a single
+number: measure a cold start on a *cold host*, or you will quote the optimistic half.
+
+Steady-state, all four invokes: `Duration ~1400–1570 ms`, `Max Memory Used 153 MB` of 1024 MB.
+
+The memory headroom is deliberate and should not be trimmed — Lambda scales CPU with memory,
+so the 1024 MB is buying INIT speed, not heap. Dropping it to fit the 153 MB actually used
+would make the cold start worse, which is the one number under real pressure here.
+
+### The object is correct
+
+| Check | Result |
+|---|---|
+| Presigned URL | HTTP 200, 15-minute expiry (`X-Amz-Expires=900`) |
+| `Content-Type` | `image/png` — renders inline, not a download |
+| Encryption | `aws:kms`, Bucket Key enabled, AWS-managed `aws/s3` key |
+| Image | valid PNG, 512×512, 1-bit grayscale, 1205 bytes |
+
+### Idempotency held, unprompted
+
+21 duplicate issuance deliveries re-enqueued QR generation 21 times. The object's timestamp
+moved; its key, size and bytes did not. That is the "no mechanism needed" claim above being
+exercised for real rather than argued: a deterministic key plus a pure renderer means a
+redelivery rewrites identical bytes.
+
+The honest cost is 21 renders for one ticket. Harmless, but they are real invocations, and
+the alternative — a conditional put or a dedupe table — is what this design deliberately
+rejects. A chosen trade, not an oversight.
+
+### Defect found: the QR encodes a URL that 404s
+
+Decoding the PNG gives:
+
+```
+https://<http-api-id>.execute-api.eu-central-1.amazonaws.com/tickets/<ticketId>
+```
+
+`TicketController` exposes `GET /orders/{orderId}/tickets` and `GET /tickets/{ticketId}/qr`.
+**There is no `GET /tickets/{ticketId}`.** Every QR code generated so far points at a route
+that does not exist.
+
+Nothing is misconfigured: `TICKET_VERIFY_BASE_URL` is correct, and pointing it at the API
+Gateway hostname was the right call — the hostname is stable, so these codes keep resolving
+to the same place after every teardown, which was the whole reason for creating that API
+early. The renderer is correct. **The handler was never written.**
+
+Building it is its own slice. A ticket QR exists so a gate attendant can check validity, so
+it needs a decision about what a scan should show and who may see it — an authorisation
+question, not a rendering one. Until then, treat "the QR scans" as unproven.
 
 ## Teardown
 
