@@ -152,6 +152,11 @@ hand-formatting look thrifty was never going to be charged twice.
 injection the old gate existed to refuse and asserts the frame parses back with the quote
 intact as data.
 
+This is confirmed against real AWS rather than assumed: connecting with
+`eventId=evt", "injected":"yes` stores the quote as **data** in the row, creating no extra
+attribute — so a hostile event id genuinely does reach this function, and formatting the frame
+by hand would genuinely have emitted it as structure. See the runbook's Results.
+
 ## Nothing here touches Redis
 
 Deliberate, and it is what keeps this function out of the VPC — no ENI attachment on cold

@@ -202,11 +202,29 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       500 tokens across 50 concurrent SQS batches arrive exactly once; notifier INIT 538 ms,
       37 jars — unchanged by serialising the frame, since `json-utils` was already on the
       classpath** (LocalStack + RIE, 2026-09-06)
-- [ ] AWS: WebSocket API `ticket-queue-socket` with two DynamoDB service integrations and
-      their mapping templates, `waiting-room-connections` table + `by-token` GSI + TTL,
-      `queue-admissions` + DLQ, one notifier function, an API Gateway role and a Lambda role,
-      and a task role for `waiting-room-service` — which until now had none, because until
-      now it made no AWS API calls — see `runbook-websocket-queue.md`
+- [x] AWS (connection half): `waiting-room-connections` + `by-token` GSI + TTL, the
+      `ticket-queue-socket-apigw-role`, and WebSocket API `ticket-queue-socket` with both
+      DynamoDB service integrations. **The request template was right first time; the response
+      wiring took four attempts and 500s the handshake while committing the write anyway** —
+      an integration response must be keyed `/200/` because an AWS service integration selects
+      by `${integration.response.statuscode}`, so a `$default` key is created successfully and
+      is silently unreachable. **Verified against real AWS: TTL exactly `connectedAt + 86400`
+      in epoch seconds; `eventId=evt", "injected":"yes` stored as data with no attribute
+      injected; 2 tabs → 2 rows → GSI query returns both; `$disconnect` prunes to 0.** Under
+      $0.01, $0 standing (2026-09-06)
+- [x] AWS (notifier half): ECR image, `ticket-queue-notifier`, `queue-admissions` + DLQ and
+      its event source mapping, and `ticket-waiting-room-task-role` for `waiting-room-service`
+      — which until now had none, because until now it made no AWS API calls. **A synthetic
+      admission on the queue reaches an open browser socket as
+      `{"type":"ADMITTED",...,"admissionExpiresAt":1788698504}`; two tabs on one token both get
+      it from a single message; an orphaned row 410s and is pruned with `failures=0` and an
+      empty DLQ.** Cold start is **2849 ms on real Lambda against 538 ms on the local RIE — a
+      5.3× spread, not the ~2× this project had been assuming**, and 147 MB used of 1024 MB,
+      which is the memory-buys-CPU argument stated in numbers. $0 standing (2026-09-06)
+- [ ] AWS (remaining): a `waiting-room-service` task-definition revision carrying that task
+      role and `ADMISSION_QUEUE_URL`, so the service publishes the admission itself rather than
+      a synthetic message standing in — needs ElastiCache + Fargate up (~$0.021/hr, teardown
+      required), so deferred to a session that brings them up anyway
 - [ ] Cognito user pool + guest checkout flow
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL

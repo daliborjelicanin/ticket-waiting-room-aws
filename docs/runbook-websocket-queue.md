@@ -16,8 +16,11 @@ Prerequisites: `runbook-waiting-room-redis.md` (the service, its cluster and its
 definition), `runbook-ecr-packaging.md`, `runbook-alb-apigateway.md` (the REST edge, which
 stays exactly as it is — a WebSocket API is a separate API with its own id).
 
-**Status: built and tested locally; not yet stood up on AWS.** Results section carries the
-local measurements only.
+**Status: stood up and verified end-to-end on AWS (2026-09-06)** — a synthetic admission on
+`queue-admissions` reaches an open browser socket as an `ADMITTED` frame. The one piece not
+exercised against AWS is `waiting-room-service` publishing the message itself, because that
+needs ElastiCache and Fargate running; its task role exists but is not yet on a task-definition
+revision. `SqsAdmissionPublisherIT` covers that hop against LocalStack.
 
 ## Why This Exists
 
@@ -240,10 +243,81 @@ Four things in those eleven lines are load-bearing:
   there is nothing to race, and one token legitimately holds several rows when someone opens
   several tabs.
 
-**Add an integration response to each route** (template selection expression `$default`,
-empty body). A WebSocket non-proxy integration without one can leave the handshake hanging
-rather than completing it — check the route's *Integration response* tab shows one before
-concluding the template is at fault.
+### The response side, which is where this actually goes wrong
+
+The request half of this worked first time. The response half took four attempts and cost the
+whole debugging budget of the session, so it is written out in full.
+
+A non-proxy WebSocket route needs **three** things beyond the integration, and missing any of
+them produces the same symptom: `Unexpected server response: 500` at the client, **with the
+DynamoDB write already committed**. That is the nastiest part — the side effect happens, the
+row is correct, and the handshake still fails, so scanning the table tells you everything is
+fine while nothing works.
+
+1. **An integration response keyed `/200/`, not `$default`.** An AWS service integration is
+   created with `IntegrationResponseSelectionExpression = ${integration.response.statuscode}`
+   — read it back with `get-integration` and you will see it. Selection is therefore by status
+   code, and a `$default` key **can never match**. This is the trap: creating the integration
+   response succeeds, the console shows one, and it is silently unreachable.
+2. **A response template, selected by `--template-selection-expression '\$default'`.**
+   Without it DynamoDB's `{}` body passes through to a `$connect` handshake that must not
+   carry one. Setting the response template alone is not enough — the selection expression
+   has to be set too, or the template is as unreachable as the response in (1) was.
+3. **A route response**, plus `--route-response-selection-expression '$default'` on the route.
+
+**Bisect with a MOCK integration** if this bites. Repointing `$connect` at
+`--integration-type MOCK` with `--request-templates '{"$default": "{\"statusCode\":200}"}'`
+separates "route/stage/route-response wiring is wrong" from "the DynamoDB response mapping is
+wrong" in one test. It is what found (2) here, after (1) and (3) had each been fixed without
+the handshake improving.
+
+Execution logging would have answered this in one look, but it needs an account-level
+CloudWatch role for API Gateway that this account does not have (`aws apigateway get-account`
+→ `cloudwatchRoleArn: None`). Setting one up is a prerequisite worth doing before the next
+API Gateway slice, not during one.
+
+### The commands, as run
+
+The console can do all of this, but the templates are multi-line VTL and the response wiring
+is four resources deep, so the CLI is both faster and re-runnable after a teardown. Templates
+live in files; `--request-templates` wants a JSON map, built here with `python3 -c` rather
+than fought with in shell quoting.
+
+```bash
+API=$(aws apigatewayv2 create-api --name ticket-queue-socket --protocol-type WEBSOCKET \
+  --route-selection-expression '$request.body.action' --tags project=ticket-waiting-room \
+  --region eu-central-1 --query ApiId --output text)
+
+ROLE=arn:aws:iam::<account-id>:role/ticket-queue-socket-apigw-role
+python3 -c 'import json,sys; print(json.dumps({"$default": open(sys.argv[1]).read()}))' \
+  connect-request.vtl > /tmp/connect-templates.json
+
+CONNECT=$(aws apigatewayv2 create-integration --api-id $API --region eu-central-1 \
+  --integration-type AWS \
+  --integration-uri 'arn:aws:apigateway:eu-central-1:dynamodb:action/PutItem' \
+  --integration-method POST --credentials-arn $ROLE --passthrough-behavior NEVER \
+  --template-selection-expression '\$default' \
+  --request-templates file:///tmp/connect-templates.json \
+  --query IntegrationId --output text)
+
+# The three response resources. Skipping any one of them = 500 with the row written.
+aws apigatewayv2 create-integration-response --api-id $API --integration-id $CONNECT \
+  --region eu-central-1 --integration-response-key '/200/' \
+  --template-selection-expression '\$default' --response-templates '{"$default": ""}'
+
+ROUTE=$(aws apigatewayv2 create-route --api-id $API --region eu-central-1 \
+  --route-key '$connect' --target "integrations/$CONNECT" --query RouteId --output text)
+aws apigatewayv2 update-route --api-id $API --route-id $ROUTE --region eu-central-1 \
+  --route-response-selection-expression '$default'
+aws apigatewayv2 create-route-response --api-id $API --route-id $ROUTE \
+  --region eu-central-1 --route-response-key '$default'
+
+aws apigatewayv2 create-stage --api-id $API --region eu-central-1 --stage-name dev \
+  --auto-deploy --tags project=ticket-waiting-room
+```
+
+`$disconnect` is the same with `action/DeleteItem`, the disconnect template, and route key
+`$disconnect`.
 
 **The route returns whatever DynamoDB returns.** A failed `PutItem` fails the handshake with a
 500, not a 403 — there is no place in a mapping template to run the old UUID check. That is
@@ -489,9 +563,63 @@ Then the two things that are easy to skip and are the actual claims:
 Measure the number worth recording: time from the `admit` response to the frame arriving,
 against the poll interval it replaces.
 
-## Results (local, 2026-09-06)
+## Results
 
-Not yet stood up on AWS. What has been measured:
+### Stood up on AWS, 2026-09-06 — the connection half
+
+Account `<account-id>`, `eu-central-1`, API id `<websocket-api-id>`. Verified with a `ws` client
+against the real endpoint, not a simulation:
+
+| Claim | Result |
+|---|---|
+| The `$connect` template writes the item the notifier reads | **Row correct on the first try** — `connectionId`, `eventId`, `token` all as expected |
+| TTL is epoch **seconds**, not milliseconds | `connectedAt` 10 digits; `expiresAt` − `connectedAt` = **86400** exactly |
+| `$util.escapeJavaScript` stops injection | `eventId=evt", "injected":"yes` stored as literal data; **no `injected` attribute created** |
+| Two tabs, one token → two rows | 2 rows, distinct `connectionId`s |
+| The KEYS_ONLY GSI answers the notifier's question | `Query(eventId, token)` → **count 2**, both `connectionId`s, no projected payload |
+| `$disconnect` prunes | table `Count` back to **0** within ~3 s of both sockets closing |
+
+The escaping result is the one worth dwelling on: it is the exact scenario
+`QueueSocketIT.aTokenThatWouldHaveBrokenAHandBuiltFrameIsEscapedInstead` covers, confirmed
+end-to-end. A hostile `eventId` **does** reach DynamoDB as data, so the notifier reading that
+row genuinely has to serialise its frame rather than format it. The decision to drop the
+hand-formatted string was not theoretical.
+
+What it cost to run all of this: **under $0.01**, and $0 standing, so it is still up.
+
+### Stood up on AWS, 2026-09-06 — the notifier half
+
+Verified by putting a synthetic message on `queue-admissions` with a real socket open — the
+whole path except `waiting-room-service`'s own publish:
+
+| Claim | Result |
+|---|---|
+| Event source mapping → notifier → frame | **`{"type":"ADMITTED","eventId":"evt-1","token":"...","admissionExpiresAt":1788698504}`** arrived at the client, `admissionExpiresAt` matching the sent attribute exactly |
+| Fan-out: two tabs, one message | **both** tabs received the frame from a single admission |
+| A 410 is news, not failure | orphan row pruned, `admission notify complete records=1 failures=0`, DLQ **0** |
+| `ReportBatchItemFailures` reaches Lambda | a failing record returned `failures=1` and was retried rather than dropped |
+
+**Cold start is 5.3× the local number, not 2×.**
+
+| | Local RIE | Real Lambda |
+|---|---|---|
+| INIT | 538 ms | **2849 ms** |
+| Invoke | 345 ms | 1372 ms (cold), 127 ms (warm) |
+| Max memory used | — | **147 MB of 1024 MB** |
+
+`runbook-qr-generation.md` measured roughly a 2× spread between a warm host and a cold one, and
+this runbook repeated that as the expected shape. It is wrong here: 2849 ms against a 538 ms
+RIE reading. Still comfortably inside the 10-second INIT budget, but the margin is a third of
+what the local number suggested, and **an RIE measurement is not a forecast of anything**. Take
+the first real `INIT_REPORT` before believing a cold-start claim.
+
+The memory line is the other half of that story: 147 MB used of 1024 MB provisioned. The
+memory is not there for heap, it is there for the CPU share that Lambda scales with it — which
+is exactly the argument for not trimming this to 256 MB because "it only uses 147".
+
+### Local, 2026-09-06 — the notifier half
+
+What was measured before deploying:
 
 | Check | Result |
 |---|---|
@@ -546,6 +674,33 @@ a compile error for a deploy-time one: rename an attribute in `ConnectionTableSc
 nothing breaks until a frame silently fails to arrive. `QueueSocketIT`'s row-shape test is the
 replacement, and it only works because it spells the attribute names out as literals instead
 of importing the constants.
+
+**A 500 handshake with the write already committed.** The response wiring failed three
+different ways while the `PutItem` succeeded every time — see *The response side*. Worth
+internalising as a shape: in a service integration the side effect and the client's answer are
+separate failure domains, so "the data looks right" is not evidence the route works. The
+Lambda version could not fail this way, because there the write and the return value were the
+same function returning once. That is a genuine thing given up along with the handler, and it
+was not on the list when the trade was made.
+
+**The request template was right first time; the response wiring took four attempts.** The
+part with no compiler and no test was not the part that broke. Worth remembering before
+trusting an intuition about where the risk in a change lives.
+
+**A malformed `connectionId` is a 400, not a 410.** Testing the prune path with an invented id
+proves nothing: API Gateway answers `ApiGatewayManagementApiException: Invalid connectionId
+(Status Code: 400)`, which the handler correctly treats as retryable, so the record goes back
+to the queue rather than pruning anything. Only an id API Gateway actually minted, whose socket
+has since closed, returns `GoneException`. To test it properly: open a socket, capture its
+`connectionId` from the table **while it is open**, let it close, then re-insert that row by
+hand — that is a well-formed id pointing at a dead connection.
+
+Worth knowing what the 400 path costs if a corrupt row ever does appear: five receives, each
+one re-pushing the frame to every *healthy* socket for that token, and then the DLQ. Harmless
+by design — a duplicate `ADMITTED` frame is news received twice — but it is waste on a
+permanent failure. It cannot arise from normal operation now that API Gateway writes the rows
+itself; it is listed because the only way it happened here was someone editing the table by
+hand, which is also how it would happen in production.
 
 ### Predicted but not hit
 
