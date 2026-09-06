@@ -139,9 +139,9 @@ Both tags should report the **same digest** — one manifest, two names, billed 
 | | |
 |---|---|
 | Repository URI | `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/waiting-room-service` |
-| Tags | `6a55391`, `latest` (same digest) |
-| Digest | `sha256:1c52fcc2af92b4a16ff77daa16eb17cd03af230a766510d343d8342326da2cc4` |
-| Stored | 140 MB compressed (60 dependency jars vs seat-inventory's ~79 — no AWS SDK) |
+| Tags | **`b249bbb`, `latest`** (same digest) — supersedes `6a55391` |
+| Digest | **`sha256:a3cf61dac7bc5b35455cbce3ecfb65ed33715b260a30b2f04776da753f08975e`** |
+| Stored | 140 MB compressed (60 dependency jars vs seat-inventory's ~79) |
 | Tag mutability | MUTABLE |
 | Scan on push | **on** — the gap above, fixed at creation this time |
 | Lifecycle policy | keep last 3 |
@@ -149,9 +149,16 @@ Both tags should report the **same digest** — one manifest, two names, billed 
 The packaging steps repeated verbatim. Three things differ about the *service*, and they
 matter when the task definition is written:
 
-- **No task role.** This service makes no AWS API calls at all — its only dependency is
-  the ElastiCache endpoint, gated by security group rather than IAM. Slice 1's task role
-  has no counterpart here; only the execution role (ECR pull + logs) is needed.
+- **A task role, as of slice 6** (`ticket-waiting-room-task-role`, one statement:
+  `sqs:SendMessage` on `queue-admissions`). It used to have none, because the service made
+  no AWS API calls at all; publishing admissions for the WebSocket notifier changed that.
+  The rebuild to `b249bbb` on 2026-09-06 is what carries the publishing code — **`6a55391`
+  predates it entirely**, so a task definition still pointing at that digest runs a service
+  that will never publish anything and will not say so.
+- **`ADMISSION_QUEUE_URL`** joins the environment variables. Leaving it unset is a supported
+  state, not a broken one: the service falls back to `LoggingAdmissionPublisher` and runs
+  with no AWS at all, which is how it runs locally. It is also **silent** — an admission
+  that should have been announced is a log line, not an error.
 - **`REDIS_HOST`/`REDIS_PORT` replace `AWS_REGION`** as the task definition's environment
   variables, and they are *required* — the image carries no working default, because the
   ElastiCache endpoint does not exist until the cluster is created. That sequencing is

@@ -16,11 +16,10 @@ Prerequisites: `runbook-waiting-room-redis.md` (the service, its cluster and its
 definition), `runbook-ecr-packaging.md`, `runbook-alb-apigateway.md` (the REST edge, which
 stays exactly as it is — a WebSocket API is a separate API with its own id).
 
-**Status: stood up and verified end-to-end on AWS (2026-09-06)** — a synthetic admission on
-`queue-admissions` reaches an open browser socket as an `ADMITTED` frame. The one piece not
-exercised against AWS is `waiting-room-service` publishing the message itself, because that
-needs ElastiCache and Fargate running; its task role exists but is not yet on a task-definition
-revision. `SqsAdmissionPublisherIT` covers that hop against LocalStack.
+**Status: stood up and verified end-to-end on AWS (2026-09-06)**, with nothing synthetic
+anywhere in the path — join the queue over REST, open a socket, `POST .../admit`, and the frame
+arrives. ElastiCache and the Fargate task were torn down after verification; everything else is
+$0 standing and left up.
 
 ## Why This Exists
 
@@ -617,9 +616,26 @@ The memory line is the other half of that story: 147 MB used of 1024 MB provisio
 memory is not there for heap, it is there for the CPU share that Lambda scales with it — which
 is exactly the argument for not trimming this to 256 MB because "it only uses 147".
 
-### Local, 2026-09-06 — the notifier half
+### The whole path, 2026-09-06
 
-What was measured before deploying:
+`waiting-room-service` on Fargate Spot (`waiting-room-service:2`, image `b249bbb`) against a
+real ElastiCache node, publishing to `queue-admissions` under `ticket-waiting-room-task-role`:
+
+| Step | Result |
+|---|---|
+| `POST /events/evt-live-1/queue` | `{"status":"WAITING","position":1}` |
+| Socket opened for that token | 1 row via the `$connect` mapping template |
+| `POST /events/evt-live-1/queue/admit` | `{"admitted":1,"admissionExpiresAt":"2026-09-06T12:58:48Z"}` |
+| Frame at the browser | **`{"type":"ADMITTED","eventId":"evt-live-1","token":"82834735-...","admissionExpiresAt":1788699528}`** |
+| Batch: 3 tokens, 3 sockets, **one** admit call | **3 frames, each to the right socket**, identical `admissionExpiresAt` |
+| Publish failures | none — no `WARN` from `WaitingRoomService.announce` |
+| Notifier | `records=1 failures=0` ×4, DLQ **0** |
+
+The batch case is the one worth having: it is `SqsAdmissionPublisher`'s `SendMessageBatch` path
+against real SQS, delivering one message per token, and it confirms the fan-out routes by token
+rather than broadcasting — each socket got its own token and no one else's.
+
+### Local, 2026-09-06 — measured before deploying
 
 | Check | Result |
 |---|---|
@@ -714,6 +730,10 @@ kilobytes — so unlike the ElastiCache and RDS slices, this one does not have t
 between sessions. See *What It Costs*.
 
 ```bash
+# The hourly pair. Everything below this is $0 standing and can stay.
+aws ecs stop-task --cluster ticket-waiting-room --task <task-arn> --region eu-central-1
+aws elasticache delete-cache-cluster --cache-cluster-id ticket-waiting-room-cache --region eu-central-1
+
 aws lambda delete-function --function-name ticket-queue-notifier --region eu-central-1
 aws apigatewayv2 delete-api --api-id <api-id> --region eu-central-1
 aws sqs delete-queue --queue-url https://sqs.eu-central-1.amazonaws.com/<account-id>/queue-admissions

@@ -221,10 +221,14 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       empty DLQ.** Cold start is **2849 ms on real Lambda against 538 ms on the local RIE — a
       5.3× spread, not the ~2× this project had been assuming**, and 147 MB used of 1024 MB,
       which is the memory-buys-CPU argument stated in numbers. $0 standing (2026-09-06)
-- [ ] AWS (remaining): a `waiting-room-service` task-definition revision carrying that task
-      role and `ADMISSION_QUEUE_URL`, so the service publishes the admission itself rather than
-      a synthetic message standing in — needs ElastiCache + Fargate up (~$0.021/hr, teardown
-      required), so deferred to a session that brings them up anyway
+- [x] AWS (remaining): `waiting-room-service:2` carrying `ticket-waiting-room-task-role` and
+      `ADMISSION_QUEUE_URL`, on a rebuilt image — **`6a55391` predated the publishing code
+      entirely, so the old revision would have run green and silently published nothing**.
+      **Whole path proven with nothing synthetic: join over REST → socket → `POST .../admit` →
+      `{"type":"ADMITTED","eventId":"evt-live-1",...}` at the browser; and 3 tokens admitted in
+      one call produced 3 frames, each routed to its own socket** — the `SendMessageBatch` path
+      against real SQS. No publish `WARN`, DLQ 0. ElastiCache + task torn down after
+      (2026-09-06)
 - [ ] Cognito user pool + guest checkout flow
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
