@@ -24,7 +24,15 @@ aws-sdk-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
 aws-sdk-sqs = { module = "software.amazon.awssdk:sqs" }
 aws-sdk-s3 = { module = "software.amazon.awssdk:s3" }
 aws-sdk-sesv2 = { module = "software.amazon.awssdk:sesv2" }
+# The @connections half of a WebSocket API: postToConnection is the only way a server
+# initiates a frame, and it lives in its own artifact rather than in apigatewayv2.
+aws-sdk-apigatewaymanagementapi = { module = "software.amazon.awssdk:apigatewaymanagementapi" }
 aws-sdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client" }
+# Already on every AWS SDK classpath as a transitive of the service clients, which use it to
+# read their own JSON wire protocol. Declared explicitly because queue-socket-lambda calls
+# JsonWriter directly to build its outbound frame, and a direct call on an undeclared
+# transitive is one dependency bump away from not compiling.
+aws-sdk-json-utils = { module = "software.amazon.awssdk:json-utils" }
 aws-lambda-core = { module = "com.amazonaws:aws-lambda-java-core", version.ref = "awsLambdaCore" }
 aws-lambda-ric = { module = "com.amazonaws:aws-lambda-java-runtime-interface-client", version.ref = "awsLambdaRic" }
 aws-lambda-events = { module = "com.amazonaws:aws-lambda-java-events", version.ref = "awsLambdaEvents" }

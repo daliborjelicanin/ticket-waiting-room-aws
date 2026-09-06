@@ -16,6 +16,7 @@ flowchart TB
         TIM["TicketIssuanceMessage"]
         PCE["PurchaseConfirmedEvent"]
         SHE["SeatHoldExpiredEvent"]
+        QAM["QueueAdmissionMessage<br/>SQS body + attribute names"]
         PUMP["SqsMessagePump<br/>the long-poll consumer loop"]
         EXC["exceptions<br/>SeatUnavailable · HoldNotFound · OrderNotFound<br/>OrderNotPayable · ChargeInProgress<br/>TicketNotFound · UnknownQueueToken"]
     end
@@ -26,6 +27,8 @@ flowchart TB
     QR["qr-generation-lambda"]
     NS["notification-service"]
     CP["checkout-payment-service"]
+    WR["waiting-room-service"]
+    QS["queue-socket-lambda"]
     ASL["docs/checkout-saga.asl.json<br/><i>no compiler checks this one</i>"]
 
     STS --- SI & HC
@@ -33,6 +36,7 @@ flowchart TB
     TIM --- TI & ASL
     PCE --- NS & ASL
     SHE --- HC
+    QAM --- WR & QS
     PUMP --- TI & NS
     EXC --- SI & CP & TI & NS
 ```
@@ -45,6 +49,7 @@ flowchart TB
 | `TicketQrObjects` | writer and reader use different keys | download endpoint reports `PENDING` forever while the object sits in the bucket |
 | `TicketIssuanceMessage` | ASL renames a field | field deserialises to `null` forever — pinned by `TicketIssuanceContractTest` |
 | `PurchaseConfirmedEvent` | ASL renames a field | an email addressed to nobody about seat `null` |
+| `QueueAdmissionMessage` | sender and notifier disagree on an attribute name | the notifier rejects every admission into the DLQ, and the queue looks broken while Redis is fine |
 
 None of these is a compile error, and none is a runtime error. That is the whole argument
 for naming them once.

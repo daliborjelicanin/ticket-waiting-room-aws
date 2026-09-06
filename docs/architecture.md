@@ -15,6 +15,7 @@ Per-module diagrams, with the internals each service is actually responsible for
 | `notification-service` | [ARCHITECTURE.md](../notification-service/ARCHITECTURE.md) | SNS fan-out, sender split, the duplicate-email tradeoff |
 | `hold-cleanup-lambda` | [ARCHITECTURE.md](../hold-cleanup-lambda/ARCHITECTURE.md) | Scan → guarded reclaim, why TTL is not enough |
 | `qr-generation-lambda` | [ARCHITECTURE.md](../qr-generation-lambda/ARCHITECTURE.md) | Bare-id message, deterministic key, partial batch failure |
+| `queue-socket-lambda` | [ARCHITECTURE.md](../queue-socket-lambda/ARCHITECTURE.md) | The admission notifier, the GSI lookup, why the connect routes have no code |
 | `common` | [ARCHITECTURE.md](../common/ARCHITECTURE.md) | Who shares which contract, and what breaks when one drifts |
 
 ---
@@ -48,6 +49,7 @@ flowchart LR
     subgraph lambdas["Lambda — container images, no Spring"]
         HC["hold-cleanup-lambda"]
         QR["qr-generation-lambda"]
+        WSN["queue-socket-lambda<br/>admission notifier"]
     end
 
     EB["EventBridge Scheduler"]
@@ -58,6 +60,7 @@ flowchart LR
         PG1[("RDS Postgres<br/>checkout db")]
         PG2[("RDS Postgres<br/>ticketing db")]
         S3[("S3<br/>ticket QR objects")]
+        CONN[("DynamoDB<br/>waiting-room-connections")]
     end
 
     subgraph msg["Messaging"]
@@ -65,12 +68,14 @@ flowchart LR
         QQR(["qr-generation-queue"])
         TOPIC{{"purchase-confirmed<br/>SNS topic"}}
         QNOTIF(["notifications-queue"])
+        QADM(["queue-admissions"])
     end
 
     SES["SES"]
 
     Browser --> WAF --> APIGW --> ALB
-    Browser -.-> WSAPI
+    Browser -->|"wss, one socket per tab"| WSAPI
+    WSAPI -->|"$connect / $disconnect<br/><b>AWS service integration — no Lambda</b>"| CONN
     ALB --> WR & SI & CP & TI
     Browser -->|"today: public IP"| WR & SI & CP & TI
 
@@ -94,8 +99,12 @@ flowchart LR
 
     EB -->|"every minute"| HC --> DDB
 
+    WR -->|"one message per admitted token"| QADM --> WSN
+    WSN -->|"which sockets hold this token"| CONN
+    WSN -->|"postToConnection"| WSAPI
+
     classDef planned stroke-dasharray:5 4;
-    class WAF,APIGW,WSAPI,ALB planned;
+    class WAF,APIGW,ALB planned;
 ```
 
 **Why each store is where it is** — the split is the argument the project exists to make:
@@ -258,9 +267,10 @@ stateDiagram-v2
 
 ## 5. Asynchronous edges
 
-Everything downstream of the capture. All four hops are at-least-once, and each one names
-what makes redelivery harmless — the point being that not one of them is a
-`findBy...`-then-write check.
+Everything downstream of the capture, plus the one edge that runs the other way — the
+admission push, which starts at the waiting room rather than the saga. Every hop is
+at-least-once, and each one names what makes redelivery harmless; the point being that not
+one of them is a `findBy...`-then-write check.
 
 ```mermaid
 flowchart TB
@@ -283,15 +293,30 @@ flowchart TB
     QN -.->|"maxReceiveCount"| DLQN(["notifications DLQ"])
     NS --> SESD
 
+    WR["waiting-room-service<br/>admit.lua ZPOPMIN"]
+    WR -->|"one message per token"| QA(["queue-admissions"])
+    QA --> WSN["queue-socket-lambda<br/>notifier"]
+    QA -.->|"maxReceiveCount"| DLQA(["admissions DLQ"])
+    WSN -->|"postToConnection"| WS["API Gateway WebSocket"]
+
     I1["idempotent: UNIQUE order_id, seat_id"] -.- TI
     I2["idempotent: deterministic S3 key<br/>+ pure renderer"] -.- QRL
     I3["NOT idempotent — a redelivery<br/>sends a second email (accepted)"] -.- NS
+    I4["NOT idempotent — a redelivery<br/>sends a second ADMITTED frame (accepted);<br/>a closed socket 410s and is pruned"] -.- WSN
 ```
 
-The asymmetry in that last note is the honest one: a duplicate ticket or a duplicate
+The asymmetry in that third note is the honest one: a duplicate ticket or a duplicate
 charge is a defect, a duplicate confirmation email is an annoyance. The fix — a
 `notifications_sent` table with a unique key — is deferred rather than faked with an
 in-memory guard that would last exactly as long as one task.
+
+The fourth is cheaper still, because an `ADMITTED` frame carries no state transition, only
+news of one: a client that receives it twice learns the same thing twice. What makes the
+whole edge safe to be best-effort is that it is not the only channel — the admission is
+already durable in Redis, and `GET /events/{eventId}/queue/{token}` still reports it. The
+socket removes the need to poll; it is not what makes the answer true. That is also why the
+publish is deliberately *not* allowed to fail an admission: `ZPOPMIN` has already happened,
+so a retry driven by a failed announcement would pop a second batch of people.
 
 ---
 
@@ -312,6 +337,6 @@ flowchart LR
     classDef partial fill:#7a5c1e,stroke:#4d3a13,color:#fff;
     classDef todo stroke-dasharray:5 4;
     class S0,S1,S2,S3,S4 done;
-    class S5 partial;
-    class S6,S7,S8 todo;
+    class S5,S6 partial;
+    class S7,S8 todo;
 ```

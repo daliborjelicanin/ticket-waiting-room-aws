@@ -14,7 +14,7 @@ digest `sha256:1c52fcc2af92b4a16ff77daa16eb17cd03af230a766510d343d8342326da2cc4`
 | Property | Value |
 |---|---|
 | Execution role | `ticket-ecs-execution-role` — **new**, see below |
-| Task role | **none** — this service makes no AWS API calls |
+| Task role | **none** as built — superseded by slice 6, see below |
 | Cache subnet group | `ticket-waiting-room-cache-subnets` |
 | Cache security group | `waiting-room-cache-sg` — inbound tcp/6379 from `waiting-room-sg` |
 | Task security group | `waiting-room-sg` — inbound tcp/8080 from `<my-ip>/32` |
@@ -96,10 +96,15 @@ execution-role work, so the conditions are correct. Task stopped immediately aft
 > condition is the first thing to check: `aws:SourceArn` is region-pinned to
 > `eu-central-1`, so the same role will not work in another region without widening it.
 
-**No task role for this service.** Leave it unset in the task definition. `waiting-room-
-service` talks only to Redis; its access is gated by security group, not IAM. This is the
-instructive contrast with slice 1, where `seat-inventory-task-role` carried three
-DynamoDB actions.
+**No task role for this service, as originally built.** `waiting-room-service` talked only
+to Redis; its access is gated by security group, not IAM. This was the instructive contrast
+with slice 1, where `seat-inventory-task-role` carried three DynamoDB actions.
+
+> **Superseded by slice 6.** The service now publishes admitted tokens to
+> `queue-admissions` so the WebSocket notifier can push them, which is an AWS API call and
+> therefore needs a task role — `ticket-waiting-room-task-role`, carrying `sqs:SendMessage`
+> on that one queue ARN and nothing else. See `runbook-websocket-queue.md`. The contrast
+> above survives in a narrower form: one permission for one call, rather than none.
 
 ### 2. Log group — CloudWatch
 
@@ -175,7 +180,8 @@ RBAC, so leaving it off means the cache has no authentication at all.
 **ECS → Task definitions → Create new task definition**:
 - Family `waiting-room-service`
 - Launch type **AWS Fargate**, **Linux/X86_64**, **0.25 vCPU / 0.5 GB**
-- **Task role: none.** Execution role: `ticket-ecs-execution-role`
+- **Task role:** `ticket-waiting-room-task-role` since slice 6 (none before it).
+  Execution role: `ticket-ecs-execution-role`
 - Container name `waiting-room-service`, image
   `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/waiting-room-service@sha256:1c52fcc2af92b4a16ff77daa16eb17cd03af230a766510d343d8342326da2cc4`
   (pin by digest, not by tag — it makes "which image is running" answerable in a rollback)
@@ -415,8 +421,10 @@ image.
 - `ticket-ecs-execution-role` should be a project-owned `aws_iam_role` shared by both
   services; the deleted `ecsTaskExecutionRole` is exactly the undeclared dependency on a
   hand-made artifact that Phase 1 warned about.
-- The absence of a task role here is worth an explicit comment in the Terraform — a reader
-  will otherwise assume it was forgotten.
+- The task role is a single-statement `aws_iam_role_policy` — `sqs:SendMessage` on the
+  `queue-admissions` ARN. Worth an explicit comment that the narrowness is deliberate; a
+  reader who knows the service also reaches Redis will otherwise assume permissions are
+  missing rather than unnecessary.
 - `REDIS_HOST` interpolates from the `aws_elasticache_cluster` resource's
   `cache_nodes[0].address`, which removes the manual sequencing constraint entirely.
 - Revisit in-transit encryption + RBAC when the no-NAT/public-subnet simplification is

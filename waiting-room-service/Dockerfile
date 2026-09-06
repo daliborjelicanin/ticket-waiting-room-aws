@@ -13,9 +13,10 @@ RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 FROM eclipse-temurin:26-jre
 WORKDIR /app
 
-# The JVM never needs root. Unlike seat-inventory this service makes no AWS API
-# calls at all, so it runs without a task role — its only outbound dependency is
-# the ElastiCache endpoint, which is gated by security group rather than by IAM.
+# The JVM never needs root. Redis is still reached by network rather than by IAM,
+# but since slice 6 this service also announces admissions on SQS so the WebSocket
+# notifier can push them — so it now needs a task role, carrying sqs:SendMessage on
+# queue-admissions and nothing else.
 RUN groupadd --system --gid 1001 app \
  && useradd --system --uid 1001 --gid app --no-create-home app
 

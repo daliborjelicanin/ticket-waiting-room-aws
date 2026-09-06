@@ -3,6 +3,8 @@ package com.ticketwaitingroom.waitingroom.queue;
 import com.ticketwaitingroom.common.exceptions.UnknownQueueTokenException;
 import com.ticketwaitingroom.waitingroom.config.WaitingRoomProperties;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -22,7 +24,10 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class WaitingRoomService {
 
+    private static final Logger log = LoggerFactory.getLogger(WaitingRoomService.class);
+
     private final WaitingRoomQueue queue;
+    private final AdmissionPublisher admissionPublisher;
     private final WaitingRoomProperties properties;
     private final Clock clock;
 
@@ -69,7 +74,32 @@ public class WaitingRoomService {
         // Truncated because Redis stores the deadline as epoch seconds: without this the
         // expiry echoed back here and the one a later position lookup reports would differ.
         Instant admissionExpiresAt = now.plus(properties.admissionDuration()).truncatedTo(ChronoUnit.SECONDS);
-        return new Admission(queue.admitNext(eventId, count, admissionExpiresAt, now), admissionExpiresAt);
+        List<String> tokens = queue.admitNext(eventId, count, admissionExpiresAt, now);
+
+        announce(eventId, tokens, admissionExpiresAt);
+        return new Admission(tokens, admissionExpiresAt);
+    }
+
+    /**
+     * Tell the admitted tokens they are through, on a best-effort basis.
+     *
+     * <p><strong>A failure here must not fail the admission.</strong> By the time this runs
+     * the tokens are already out of the queue — {@code ZPOPMIN} does not roll back — so
+     * throwing would report failure for work that succeeded, and the caller's natural retry
+     * would pop a second batch of people who were never told either. Swallowing costs at
+     * most a notification, and clients still hold
+     * {@code GET /events/{eventId}/queue/{token}} as the source of truth.
+     */
+    private void announce(String eventId, List<String> tokens, Instant admissionExpiresAt) {
+        if (tokens.isEmpty()) {
+            return;
+        }
+        try {
+            admissionPublisher.publish(eventId, tokens, admissionExpiresAt);
+        } catch (RuntimeException notPublished) {
+            log.warn("Admitted {} tokens for event {} but could not publish the admission; "
+                    + "those clients will only learn of it by polling", tokens.size(), eventId, notPublished);
+        }
     }
 
     public record Admission(List<String> tokens, Instant admissionExpiresAt) { }

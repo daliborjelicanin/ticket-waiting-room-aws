@@ -17,6 +17,7 @@ flowchart TB
         WC["WaitingRoomController<br/>POST /queue · GET /queue/{token} · POST /queue/admit"]
         WS["WaitingRoomService<br/>mints token + admission deadline, supplies the clock"]
         WQ["WaitingRoomQueue<br/>key naming + Lua script dispatch"]
+        AP["AdmissionPublisher<br/>SQS · logging"]
         EH["ApiExceptionHandler<br/>UnknownQueueToken → 404 ProblemDetail"]
     end
 
@@ -27,16 +28,27 @@ flowchart TB
     end
 
     R[("ElastiCache Redis")]
+    QA(["queue-admissions"])
 
     Client --> WC --> WS --> WQ
     WC -.-> EH
     WQ --> JOIN & POS & ADM --> R
+    WS -->|"admitted tokens"| AP --> QA
 
-    N["No task role: this service<br/>makes no AWS API calls at all"] -.- svc
+    N["One AWS call, one permission: sqs:SendMessage on<br/>queue-admissions. The task role exists for that alone —<br/>Redis is reached by network, not by API."] -.- AP
 ```
 
 The service layer holds **no locking of its own** — it only creates identity and
 deadlines. Every ordering and atomicity guarantee lives in the three scripts.
+
+Publishing is the one thing here that may fail without failing the request. `ZPOPMIN` does
+not roll back, so by the time `AdmissionPublisher` runs the tokens are already out of the
+queue; reporting failure would make the caller retry the admit and pop a *second* batch of
+people who were never told either. The exception stops at
+`WaitingRoomService.admitNext` and the client's next `GET /queue/{token}` is the fallback —
+the socket removes the need to poll, it is not what makes the answer true. With no
+`admission-queue-url` configured the publisher logs instead, which is what lets the service
+run locally with no AWS at all.
 
 ## Redis keys
 

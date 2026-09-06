@@ -19,3 +19,14 @@ waiting-room:
   max-admit-batch: 500
   # Idle lifetime of an event's queue keys, refreshed on every join and admit.
   key-ttl: PT24H
+  # Empty -> admissions are logged instead of published, so the service runs locally with
+  # no AWS at all. Set to the queue-admissions URL in ECS, where the WebSocket notifier
+  # Lambda is what turns these into pushed frames.
+  admission-queue-url: ${ADMISSION_QUEUE_URL:}
+
+aws:
+  region: ${AWS_REGION:eu-central-1}
+  sqs:
+    # Empty -> use the real AWS endpoint + default credentials provider chain.
+    # Set (e.g. http://localhost:4566) to point at LocalStack for local runs.
+    endpoint: ${AWS_SQS_ENDPOINT:}

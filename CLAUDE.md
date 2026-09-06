@@ -68,16 +68,27 @@ alters its behaviour, and mark not-yet-built boxes as such.
   same for a *separate* `ticketing` database on the same RDS instance — separate bounded
   context, separate Flyway history, and deliberately no foreign key across the two.
   `notification-service` sends through a `NotificationSender` interface with SES and
-  logging implementations, the same split as `PaymentGateway`/`MockPaymentGateway`.
-- `hold-cleanup-lambda`, `qr-generation-lambda` — plain `java` modules (no Spring: a DI
-  container in a Lambda is cold-start tax). Each is packaged as a container image on
-  `eclipse-temurin` with the AWS runtime interface client as the entrypoint, because no
-  managed Lambda runtime offers JDK 26, and each excludes the AWS SDK's Apache 5 and
-  Netty HTTP stacks in favour of `url-connection-client` — the single biggest lever on
-  Lambda's separate 10s INIT budget. `./gradlew :<module>:build` stages the deployment
-  package into `build/lambda/lib` for the Docker build. `qr-generation-lambda` parses no
-  JSON at all (its SQS body is a bare ticket id) for the same reason. See
-  `docs/runbook-hold-cleanup.md` and `docs/runbook-qr-generation.md`.
+  logging implementations, the same split as `PaymentGateway`/`MockPaymentGateway`;
+  `waiting-room-service` uses the same split again for `AdmissionPublisher` (SQS vs
+  logging), which is what lets it run with no AWS configured at all.
+- `hold-cleanup-lambda`, `qr-generation-lambda`, `queue-socket-lambda` — plain `java`
+  modules (no Spring: a DI container in a Lambda is cold-start tax). Each is packaged as a
+  container image on `eclipse-temurin` with the AWS runtime interface client as the
+  entrypoint, because no managed Lambda runtime offers JDK 26, and each excludes the AWS
+  SDK's Apache 5 and Netty HTTP stacks in favour of `url-connection-client` — the single
+  biggest lever on Lambda's separate 10s INIT budget. `./gradlew :<module>:build` stages
+  the deployment package into `build/lambda/lib` for the Docker build. Neither
+  `qr-generation-lambda` nor `queue-socket-lambda` *parses* JSON (a bare ticket id in one, a
+  bare queue token plus SQS message attributes in the other) for the same reason.
+  `queue-socket-lambda` holds only the SQS-driven admission notifier: `$connect` and
+  `$disconnect` are **API Gateway service integrations straight onto DynamoDB**, because each
+  is one unconditional write against a key API Gateway already holds, and a function there
+  buys nothing but a cold start and a concurrency ceiling on the one path a door-open hits
+  hardest. Put a Lambda in front of a single-item write only when something has to *decide*.
+  The notifier is invoked once per batch rather than once per socket, which is what lets it
+  afford the SDK's own `JsonWriter` for its outbound frame instead of formatting a string by
+  hand. See `docs/runbook-hold-cleanup.md`, `docs/runbook-qr-generation.md` and
+  `docs/runbook-websocket-queue.md`.
 
 ### Build Commands
 
@@ -90,16 +101,15 @@ alters its behaviour, and mark not-yet-built boxes as such.
   quietly regrown the HTTP stacks its cold start cannot afford)
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-WebSocket connect/disconnect Lambdas, Jib/`bootBuildImage` config, Terraform, CI
-workflow files. Docker packaging is hand-written per module — see
-`seat-inventory-service/Dockerfile` (Fargate service) and
+Jib/`bootBuildImage` config, Terraform, CI workflow files. Docker packaging is
+hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
 `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
 ## AWS Services by Category
 
 **Compute**
 - ECS Fargate — core services: Waiting Room, Seat Inventory, Checkout/Payment, Ticket Issuance, Notification
-- Lambda — WebSocket connect/disconnect handlers, scheduled seat-hold expiration cleanup, QR code generation on ticket issuance
+- Lambda — WebSocket admission notifier off SQS, scheduled seat-hold expiration cleanup, QR code generation on ticket issuance. `$connect`/`$disconnect` are deliberately *not* Lambdas — see the `queue-socket-lambda` module note.
 - ECR — image registry for the Fargate services
 
 **Networking / Edge**

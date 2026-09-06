@@ -13,4 +13,5 @@ include(
     "notification-service",
     "hold-cleanup-lambda",
     "qr-generation-lambda",
+    "queue-socket-lambda",
 )

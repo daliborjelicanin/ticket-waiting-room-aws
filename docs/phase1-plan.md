@@ -182,7 +182,31 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       through APIGW → ALB → Fargate → DynamoDB → 1×201, 29×409**, one holdId in the table
       — identical to slice 1 against a raw task IP, so the edge changed the address and not
       the guarantee (2026-09-05)
-- [ ] API Gateway (WebSocket) + connect/disconnect Lambdas → live queue position
+- [x] Code: API Gateway (WebSocket) → live queue position, **`$connect`/`$disconnect` as
+      DynamoDB service integrations rather than Lambdas**. Both routes do one unconditional
+      write against a key API Gateway already holds, so a function there buys only a cold
+      start and a concurrency ceiling — and container images cannot use SnapStart, so a
+      door-open throttles `$connect` and drops every client back to polling, which is the
+      stampede this slice exists to prevent. Built with the handlers first and then removed;
+      the note in `runbook-websocket-queue.md` records why. Removing them also dissolved the
+      hand-formatted frame, which was cheap only because a per-connection Lambda validated
+      its inputs — the notifier is invoked once per *batch*, so it just serialises.
+      The socket carries **admissions, not positions**: `$connect` cannot push to its own
+      connection (it does not exist until the route returns 200), so `GET /queue/{token}`
+      stays the source of truth and the socket only removes the need to poll it. The push is
+      decoupled through `queue-admissions` because `ZPOPMIN` does not roll back — an inline
+      push whose failure reached the caller would make the retry pop a *second* batch of
+      people, so a publish failure is logged and swallowed. Connections are found by a
+      **KEYS_ONLY** GSI, whose projected base key *is* the `connectionId`. **50 tabs on one
+      token → 50 frames from one admission; a 410 prunes its row without failing the record;
+      500 tokens across 50 concurrent SQS batches arrive exactly once; notifier INIT 538 ms,
+      37 jars — unchanged by serialising the frame, since `json-utils` was already on the
+      classpath** (LocalStack + RIE, 2026-09-06)
+- [ ] AWS: WebSocket API `ticket-queue-socket` with two DynamoDB service integrations and
+      their mapping templates, `waiting-room-connections` table + `by-token` GSI + TTL,
+      `queue-admissions` + DLQ, one notifier function, an API Gateway role and a Lambda role,
+      and a task role for `waiting-room-service` — which until now had none, because until
+      now it made no AWS API calls — see `runbook-websocket-queue.md`
 - [ ] Cognito user pool + guest checkout flow
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
