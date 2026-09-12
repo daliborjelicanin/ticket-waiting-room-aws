@@ -119,6 +119,24 @@ never contacted, because the decoder is lazy (see *Traps Predicted*).
 **123 tests, 0 failures**, and the three Lambda images are unchanged (34 / 40 / 37 jars,
 zero Spring on any of them — `security-starter` is deliberately not in `common`).
 
+**Then against the real pool, locally (2026-09-12).** `waiting-room-service` on `bootRun`
+with `COGNITO_ISSUER_URI` pointing at `ticket-users`, local Redis, real tokens from step 6 —
+the first time this project decoded a Cognito token anywhere, and every answer was the one
+the tests had predicted:
+
+| request | answer |
+|---|---|
+| anonymous `POST …/queue` | **401**, `WWW-Authenticate: Bearer` |
+| alice's access token, first ever | **201**, position 1 — **629 ms**, the discovery + JWKS fetch |
+| the same, again | **201** — **6.6 ms**. Claim 12 answered before AWS: ~95× between the first token a task sees and every one after |
+| alice's **ID** token | **401**, `error_description="… Not an access token: token_use must be 'access'"` — the validator's own words on the wire |
+| alice on `…/queue/admit` | **403**, handler never ran |
+| operator on `…/queue/admit` | **200**, alice admitted |
+| bob, 50 concurrent joins | **one** token, count 50 |
+
+Startup was 1.4 s with the pool not yet contacted — `SupplierJwtDecoder` doing exactly its
+job. Zero AWS spend beyond the one M2M token from step 6.
+
 ## Console / CLI Steps
 
 Set the region once. `$R="--region …"` in a variable does **not** work from zsh — it is
@@ -128,7 +146,42 @@ passed as a single argument — and that trap is now four for four across the ru
 export AWS_DEFAULT_REGION=eu-central-1
 ```
 
+Each step below gives the console path first, then the CLI. They reach the same settings;
+the console's "Create user pool" wizard (redesigned late 2024) creates a pool *and* its first
+app client together, under generated names, so the console path does steps 1 and 4a at once.
+
 ### 1. User pool
+
+**Console — Cognito → User pools → Create user pool.** The wizard is titled *Define your
+application*:
+
+| Field | Value | Why |
+|---|---|---|
+| Application type | **Single-page application** | the only public type with **no client secret**. *Traditional web application* generates one, which forces a `SECRET_HASH` on every `initiate-auth` |
+| Name your application | `ticket-web` | becomes the first app client's name |
+| Options for sign-in identifiers | **Email** only | |
+| Required attributes for sign-up | **email** | selected automatically once Email is the identifier |
+| Add a return URL | leave empty | no hosted login page is used |
+
+**Create your application** → on the *Set up your application* page, **Go to overview**.
+The pool has a generated name: **Rename** it to `ticket-users`. Copy the **User pool ID**
+and derive the issuer:
+
+```
+POOL_ID = eu-central-1_XXXXXXXXX
+ISSUER  = https://cognito-idp.eu-central-1.amazonaws.com/<POOL_ID>
+```
+
+Then walk the left navigation — the wizard's defaults are close, not exact:
+
+| Menu | Setting | Value |
+|---|---|---|
+| Authentication → Sign-in | Password policy | minimum length **12**; uncheck the four character-class requirements (Phase 2: tighten) |
+| Authentication → Sign-in | Multi-factor authentication | **No MFA** |
+| Authentication → Sign-up | Attribute verification | **email** |
+| Messaging → Email | Email provider | **Send email with Cognito** — the 50/day default sender, no SES needed here |
+
+**CLI equivalent:**
 
 ```bash
 POOL_ID=$(aws cognito-idp create-user-pool --pool-name ticket-users \
@@ -150,6 +203,13 @@ Phase 2 default to tighten.
 
 ### 2. Domain — for the token endpoint, not for a login page
 
+**Console — Branding → Domain.** The wizard usually created a Cognito prefix domain
+already; if the page shows none, **Create Cognito domain** with prefix
+`ticket-waiting-room-<account-id>`. Copy the full domain into `TOKEN_URL` as
+`https://<domain>/oauth2/token`.
+
+**CLI equivalent:**
+
 ```bash
 aws cognito-idp create-user-pool-domain --user-pool-id $POOL_ID --domain ticket-waiting-room-<account-id>
 TOKEN_URL=https://ticket-waiting-room-<account-id>.auth.eu-central-1.amazoncognito.com/oauth2/token
@@ -162,6 +222,20 @@ needs a token endpoint, and the token endpoint lives under the domain.
 
 ### 3. Resource server and scope
 
+**Console — Branding → Domain → Resource servers → Create a resource server.** (It lives
+under *Domain*, not *Applications*, because scopes belong to the authorization server.)
+
+| Field | Value |
+|---|---|
+| Resource server name | `Ticketing services` |
+| Resource server identifier | `ticketing` |
+| Custom scopes → Scope name | `ops` |
+| Custom scopes → Description | `Operator and saga access` |
+
+**Create.** The *Custom scopes* column now reads `ticketing/ops`.
+
+**CLI equivalent:**
+
 ```bash
 aws cognito-idp create-resource-server --user-pool-id $POOL_ID \
   --identifier ticketing --name "Ticketing services" \
@@ -172,6 +246,33 @@ aws cognito-idp create-resource-server --user-pool-id $POOL_ID \
 four services, and read by no compiler — the same class of contract as `SeatTableSchema`.
 
 ### 4. Two app clients
+
+**4a. `ticket-web` — Console — Applications → App clients → `ticket-web`.** The wizard
+created it. **Edit** the *App client information* and check:
+
+| Setting | Value |
+|---|---|
+| Client secret | **none** — if the page shows one, the wrong application type was chosen; delete the client and create a new one with type *Single-page application* |
+| Authentication flows | ✅ **Sign in with username and password: ALLOW_USER_PASSWORD_AUTH** · ✅ refresh tokens · SRP may stay on |
+| Access token expiration / ID token expiration | 60 minutes |
+| Login pages | leave as created; nothing uses them |
+
+Copy **Client ID** → `WEB_CLIENT`.
+
+**4b. `ticket-ops` — Console — App clients → Create app client.**
+
+| Field | Value |
+|---|---|
+| Application type | **Machine-to-machine application** |
+| Name your application | `ticket-ops` |
+| Custom scopes | ✅ **`ticketing/ops`** (offered here because step 3 already exists; if the list is empty, the resource server was not created) |
+
+**Create app client.** Open it: copy **Client ID** and **Client secret** → `OPS_CLIENT_ID`,
+`OPS_CLIENT_SECRET`. The secret is shown in full on this page; it goes into the EventBridge
+connection in step 8 and into your shell for step 6 — never into a file in the repo. If the
+scope is missing after creation: **Login pages → Edit → Custom scopes**.
+
+**CLI equivalent:**
 
 ```bash
 # Customers: public client, password auth for curl, no secret.
@@ -198,6 +299,28 @@ capabilities, which is what makes the scope check mean something.
 
 Two, because the headline result is one of them being told the other's order does not exist.
 
+**Console — Users → Create user**, twice:
+
+| Field | alice | bob |
+|---|---|---|
+| Invitation message | **Don't send an invitation** | same |
+| Email address | `alice@example.test` — or a real address you can read, for claim 10 | `bob@example.test` |
+| Mark email address as verified | ✅ | ✅ |
+| Temporary password | **Set a password** → `correct-horse-battery` | same |
+
+The console creates both in `FORCE_CHANGE_PASSWORD` state, so the first sign-in would be
+a challenge rather than a token. One CLI command per user makes the password permanent —
+the console cannot:
+
+```bash
+for u in alice bob; do
+  aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID \
+    --username $u@example.test --password 'correct-horse-battery' --permanent
+done
+```
+
+**CLI equivalent (create + permanent password in one go):**
+
 ```bash
 for u in alice bob; do
   aws cognito-idp admin-create-user --user-pool-id $POOL_ID --username $u@example.test \
@@ -214,6 +337,11 @@ and remember `runbook-notifications.md`: SES in sandbox only delivers to verifie
 
 ### 6. Tokens
 
+The console has no "give me a token" button, so this step is CLI only. (There is also
+`aws cognito-idp get-client-token`, which mints an M2M token with no domain at all — but
+the EventBridge connection in step 8 uses the token *endpoint*, so the domain is needed
+regardless, and the curl below exercises the same path the saga will.)
+
 ```bash
 # Customer: one call returns both kinds of token.
 aws cognito-idp initiate-auth --client-id $WEB_CLIENT --auth-flow USER_PASSWORD_AUTH \
@@ -222,7 +350,7 @@ aws cognito-idp initiate-auth --client-id $WEB_CLIENT --auth-flow USER_PASSWORD_
 # → ALICE_AT  ALICE_IT
 
 # Operator: client credentials.
-OPS_AT=$(curl -s -X POST $TOKEN_URL -u "$OPS_CLIENT_ID:$OPS_CLIENT_SECRET" \
+OPS_AT=$(curl -s -X POST $TOKEN_URL -u "${OPS_CLIENT_ID}:${OPS_CLIENT_SECRET}" \
   -d 'grant_type=client_credentials&scope=ticketing/ops' | jq -r .access_token)
 ```
 
@@ -457,11 +585,12 @@ aws elbv2 describe-target-health --target-group-arn <checkout-tg>
 ## What It Cost
 
 Cognito's pool, domain, resource server and the public client are free (Essentials tier,
-10k MAU). The authorizer and the Step Functions integration are free. **M2M token requests
-are billed** — per request, no free tier — and the exact rate must be read off the pricing
-page during the session and written here: ______ per token. At this traffic it is a handful
-per session, because EventBridge caches the token for its hour of life and the operator
-fetches one.
+the default for new pools: 10,000 MAU free, $0.015/MAU after). The authorizer and the Step
+Functions integration are free. **M2M token requests are billed: $0.00225 per successful
+token request**, no free tier, no per-client charge (pricing page, read 2026-09-06). At this
+traffic it is a handful per session — EventBridge caches the token for its hour of life and
+the operator fetches one — so a full session is under a cent. Confirm against the bill
+afterwards; the number is the one cost in this slice that is not zero.
 
 Standing: **$0**. The pool is the first resource in this project that is *never* torn down,
 and that is fine because it costs nothing — but destroying it would invalidate every user,
@@ -500,6 +629,13 @@ off rather than rediscovered. Move each to *Traps Hit* or *Predicted but not hit
 - **The ALB health check sees 401 now.** `200-499` accepts it. If a target group was ever
   created with a narrower matcher, the service will register unhealthy for a reason that
   looks like an auth failure and is not one.
+- **zsh mangles `"$VAR:word"`.** Inside double quotes zsh still reads `:h`, `:t`, `:r`…
+  after a bare parameter as a *modifier*, so `-u "$OPS_CLIENT_ID:wrong"` sent curl a
+  client id with three characters eaten. Hit while verifying the token endpoint with a
+  deliberately bad secret. Every `user:secret` in this runbook now braces both halves —
+  `"${OPS_CLIENT_ID}:${OPS_CLIENT_SECRET}"` — which is the fifth zsh trap across the
+  runbooks and the same rule as the other four: quote and brace anything a shell might
+  read as syntax.
 - **Two tokens for the customer.** The ID token opens `/purchase`; the access token opens
   everything else. A client sending the wrong one gets a 401 in both directions (claim 8 is
   the service refusing the ID token). This is Cognito's design — the ID token carries
