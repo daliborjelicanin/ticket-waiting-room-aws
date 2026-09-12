@@ -695,9 +695,13 @@ in bold; the ones that bit are expanded under *Traps Hit* in the Results section
 rules with it; the four target groups stay), then RDS with `--skip-final-snapshot
 --delete-automated-backups`, then ElastiCache. The notifications DLQ was purged of order 1's
 undeliverable mail. The five superseded task-definition revisions were deregistered and
-their images deleted from ECR, which is back to ~0.8 GB. The `qr-generation` event source
+their images deleted from ECR, which sits at ~1.15 GB (five images 11 MB heavier than before: Spring Security). The `qr-generation` event source
 mapping is **left enabled** — that is its correct standing state, and a previous teardown
-had left it off. Standing cost after: ECR only.
+had left it off. **The EventBridge connection is deleted too**: its managed
+`events!connection/…` secret is a Secrets Manager secret ($0.40/month prorated), which is
+why earlier sessions removed it as well. Recreating it is step 8 — one command, credentials
+from `~/.ticket-waiting-room/cognito.env` — plus the state-machine update in step 9, since
+the definition embeds the connection ARN. Standing cost after: ECR only.
 
 **Nothing new to tear down.** Every resource this slice adds is free and permanent: the
 pool, its domain, the resource server, two app clients, two users, the authorizer, the
