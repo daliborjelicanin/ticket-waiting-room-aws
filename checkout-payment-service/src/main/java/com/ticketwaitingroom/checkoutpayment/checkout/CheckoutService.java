@@ -11,6 +11,7 @@ import com.ticketwaitingroom.checkoutpayment.payment.GatewayResult;
 import com.ticketwaitingroom.checkoutpayment.payment.Payment;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentGateway;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentService;
+import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -47,18 +48,26 @@ public class CheckoutService {
      * rather than a second one the customer could be charged for separately.
      */
     @Transactional
-    public Order createOrder(String eventId, String customerRef, long amountCents,
+    public Order createOrder(UUID orderId, String eventId, String customerRef, long amountCents,
                              String idempotencyKey, List<OrderSeat> seats) {
         return orderRepository.findByIdempotencyKey(idempotencyKey)
                 .orElseGet(() -> orderRepository.saveAndFlush(Order.pending(
-                        eventId, customerRef, amountCents, properties.currency(),
+                        orderId, eventId, customerRef, amountCents, properties.currency(),
                         idempotencyKey, seats, clock.instant())));
     }
 
+    /**
+     * One customer's order.
+     *
+     * <p>Not reachable by the saga, which only ever creates and charges — so unlike those
+     * two, this is a fan-door call and the caller's {@code sub} is checked against the row.
+     * An order belonging to somebody else is reported as missing rather than as forbidden,
+     * since a 403 would confirm the id is real and turn this into an oracle for walking
+     * the id space.
+     */
     @Transactional(readOnly = true)
-    public Order findOrder(UUID orderId) {
-        return orderRepository.findById(orderId)
-                .orElseThrow(() -> new OrderNotFoundException("No order " + orderId));
+    public Order findOrder(UUID orderId, String customerRef) {
+        return requireOwned(orderId, customerRef);
     }
 
     /**
@@ -94,10 +103,18 @@ public class CheckoutService {
      * same compensating path a payment failure takes.
      */
     @Transactional
-    public Order cancel(UUID orderId) {
+    public Order cancel(UUID orderId, String customerRef) {
+        Order order = requireOwned(orderId, customerRef);
+        order.markCancelled(clock.instant());
+        return order;
+    }
+
+    private Order requireOwned(UUID orderId, String customerRef) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new OrderNotFoundException("No order " + orderId));
-        order.markCancelled(clock.instant());
+        if (!customerRef.equals(order.getCustomerRef())) {
+            throw new NotYoursException("No order " + orderId);
+        }
         return order;
     }
 }

@@ -5,6 +5,8 @@ import com.ticketwaitingroom.waitingroom.queue.QueueStatus;
 import com.ticketwaitingroom.waitingroom.queue.WaitingRoomService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,9 +18,16 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * HTTP surface for the waiting room. Joining returns 201 with the token the client must
- * keep and send back; polling an unknown token is mapped to 404 by
- * {@link ApiExceptionHandler}.
+ * HTTP surface for the waiting room.
+ *
+ * <p>Join and position are <strong>fan-door</strong> endpoints: the caller is whoever the
+ * verified JWT's {@code sub} says, and nothing else. Neither takes a token in the URL, and
+ * that is the point — a caller can only ever act on their own place, so polling somebody
+ * else's position is not a request the API can express.
+ *
+ * <p>Admit is an <strong>ops-door</strong> endpoint. It pops real people off the head of a
+ * real queue, so {@code SecurityConfig} requires the ops scope before this class is ever
+ * reached; the controller itself has nothing to check.
  */
 @RestController
 @RequiredArgsConstructor
@@ -28,14 +37,13 @@ public class WaitingRoomController {
 
     @PostMapping("/events/{eventId}/queue")
     @ResponseStatus(HttpStatus.CREATED)
-    public QueuePlaceResponse join(@PathVariable String eventId,
-                                   @RequestBody(required = false) JoinRequest request) {
-        return QueuePlaceResponse.of(waitingRoomService.join(eventId, request == null ? null : request.token()));
+    public QueuePlaceResponse join(@PathVariable String eventId, @AuthenticationPrincipal Jwt caller) {
+        return QueuePlaceResponse.of(waitingRoomService.join(eventId, caller.getSubject()));
     }
 
-    @GetMapping("/events/{eventId}/queue/{token}")
-    public QueuePlaceResponse place(@PathVariable String eventId, @PathVariable String token) {
-        return QueuePlaceResponse.of(waitingRoomService.place(eventId, token));
+    @GetMapping("/events/{eventId}/queue")
+    public QueuePlaceResponse place(@PathVariable String eventId, @AuthenticationPrincipal Jwt caller) {
+        return QueuePlaceResponse.of(waitingRoomService.place(eventId, caller.getSubject()));
     }
 
     @PostMapping("/events/{eventId}/queue/admit")
@@ -45,13 +53,15 @@ public class WaitingRoomController {
                 admission.admissionExpiresAt());
     }
 
-    /** Send back a previously issued token to re-join idempotently; omit it to be issued one. */
-    public record JoinRequest(String token) { }
-
     public record AdmitRequest(int count) { }
 
     public record AdmitResponse(String eventId, List<String> tokens, int admitted, Instant admissionExpiresAt) { }
 
+    /**
+     * The token is still returned, because the WebSocket connection is keyed by it — but it
+     * is now an opaque handle the server issued to this identity rather than a credential
+     * the client chose and must remember to send back.
+     */
     public record QueuePlaceResponse(
             String eventId,
             String token,

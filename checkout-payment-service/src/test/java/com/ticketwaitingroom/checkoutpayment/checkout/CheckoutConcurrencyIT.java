@@ -10,6 +10,7 @@ import com.ticketwaitingroom.checkoutpayment.payment.PaymentGateway;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentRepository;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentStatus;
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
+import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest
 @Testcontainers
 class CheckoutConcurrencyIT {
+
+    /** Shaped like a Cognito {@code sub}, rather than a friendly label. */
+    private static final String CUSTOMER = "b4c1e0a2-1111-4000-8000-000000000009";
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
@@ -105,7 +109,7 @@ class CheckoutConcurrencyIT {
         List<Payment> payments = paymentRepository.findByOrderIdOrderByCreatedAtAsc(order.getId());
         assertThat(payments).hasSize(1);
         assertThat(payments.getFirst().getStatus()).isEqualTo(PaymentStatus.CAPTURED);
-        assertThat(checkoutService.findOrder(order.getId()).getStatus()).isEqualTo(OrderStatus.PAID);
+        assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus()).isEqualTo(OrderStatus.PAID);
     }
 
     @Test
@@ -151,7 +155,7 @@ class CheckoutConcurrencyIT {
         assertThat(outcome.payment().getGatewayRef()).isNotBlank();
         assertThat(outcome.order().getStatus()).isEqualTo(OrderStatus.PAID);
         // Re-read from the database: the pair must hold on disk, not just in the returned object.
-        assertThat(checkoutService.findOrder(order.getId()).getStatus()).isEqualTo(OrderStatus.PAID);
+        assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus()).isEqualTo(OrderStatus.PAID);
     }
 
     @Test
@@ -214,8 +218,10 @@ class CheckoutConcurrencyIT {
     void creatingAnOrderIsIdempotent() {
         String key = "order-key-" + UUID.randomUUID();
 
-        Order first = checkoutService.createOrder("evt-1", "cust-1", 4500, key, seats());
-        Order again = checkoutService.createOrder("evt-1", "cust-1", 4500, key, seats());
+        Order first = checkoutService.createOrder(UUID.randomUUID(), "evt-1", CUSTOMER, 4500, key, seats());
+        // A retry that lost its response and generated a new id: the idempotency key, not
+        // the id, is what collapses the two onto one order.
+        Order again = checkoutService.createOrder(UUID.randomUUID(), "evt-1", CUSTOMER, 4500, key, seats());
 
         assertThat(again.getId())
                 .as("a retried create returns the original order, not a second payable one")
@@ -225,16 +231,31 @@ class CheckoutConcurrencyIT {
     @Test
     void cancellingAPendingOrderIsAllowedButCancellingAPaidOneIsNot() {
         Order pending = anOrder();
-        assertThat(checkoutService.cancel(pending.getId()).getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(checkoutService.cancel(pending.getId(), CUSTOMER).getStatus()).isEqualTo(OrderStatus.CANCELLED);
 
         Order paid = anOrder();
         checkoutService.charge(paid.getId(), "paid-" + paid.getId(), MockPaymentGateway.TOKEN_OK);
-        assertThatThrownBy(() -> checkoutService.cancel(paid.getId()))
+        assertThatThrownBy(() -> checkoutService.cancel(paid.getId(), CUSTOMER))
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    void anotherCustomersOrderIsReportedAsMissingRatherThanForbidden() {
+        Order order = anOrder();
+
+        // 404, not 403: a 403 would confirm the id is real, which is all an attacker needs
+        // to walk the id space. The two answers must be indistinguishable.
+        assertThatThrownBy(() -> checkoutService.findOrder(order.getId(), "somebody-else"))
+                .isInstanceOf(NotYoursException.class);
+        assertThatThrownBy(() -> checkoutService.cancel(order.getId(), "somebody-else"))
+                .isInstanceOf(NotYoursException.class);
+        assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus())
+                .as("and the owner is unaffected")
+                .isEqualTo(OrderStatus.PENDING);
+    }
+
     private Order anOrder() {
-        return checkoutService.createOrder("evt-1", "cust-1", 4500,
+        return checkoutService.createOrder(UUID.randomUUID(), "evt-1", CUSTOMER, 4500,
                 "order-" + UUID.randomUUID(), seats());
     }
 

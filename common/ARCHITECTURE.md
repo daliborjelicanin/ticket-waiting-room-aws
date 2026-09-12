@@ -17,8 +17,9 @@ flowchart TB
         PCE["PurchaseConfirmedEvent"]
         SHE["SeatHoldExpiredEvent"]
         QAM["QueueAdmissionMessage<br/>SQS body + attribute names"]
+        TS["TicketingScopes<br/>the OAuth2 scope Cognito mints and four services check"]
         PUMP["SqsMessagePump<br/>the long-poll consumer loop"]
-        EXC["exceptions<br/>SeatUnavailable · HoldNotFound · OrderNotFound<br/>OrderNotPayable · ChargeInProgress<br/>TicketNotFound · UnknownQueueToken"]
+        EXC["exceptions<br/>SeatUnavailable · HoldNotFound · OrderNotFound<br/>OrderNotPayable · ChargeInProgress · TicketNotFound<br/>UnknownQueueToken · NotYours"]
     end
 
     SI["seat-inventory-service"]
@@ -37,6 +38,7 @@ flowchart TB
     PCE --- NS & ASL
     SHE --- HC
     QAM --- WR & QS
+    TS --- SS["security-starter<br/>adds the SCOPE_ prefix"] & COG["Cognito resource server<br/><i>no compiler checks this one either</i>"]
     PUMP --- TI & NS
     EXC --- SI & CP & TI & NS
 ```
@@ -50,6 +52,7 @@ flowchart TB
 | `TicketIssuanceMessage` | ASL renames a field | field deserialises to `null` forever — pinned by `TicketIssuanceContractTest` |
 | `PurchaseConfirmedEvent` | ASL renames a field | an email addressed to nobody about seat `null` |
 | `QueueAdmissionMessage` | sender and notifier disagree on an attribute name | the notifier rejects every admission into the DLQ, and the queue looks broken while Redis is fine |
+| `TicketingScopes` | the Cognito resource server and `security-starter` disagree on the scope name | every saga step and every operator call answers 403, while the pool, the token and the code each look correct on their own |
 
 None of these is a compile error, and none is a runtime error. That is the whole argument
 for naming them once.

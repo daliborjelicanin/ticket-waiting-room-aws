@@ -131,7 +131,10 @@ class PurchaseConfirmedConsumerIT {
 
         await("the confirmation is sent", () -> !sender.sent.isEmpty());
         assertThat(sender.sent).hasSize(1);
-        assertThat(sender.sent.getFirst().recipient()).isEqualTo("verified@example.test");
+        // The address comes from the event's verified `email` claim, not from the fallback:
+        // that it arrives at all is also the raw-message-delivery check, since an SNS
+        // envelope here would deserialise every field to null and quietly use the fallback.
+        assertThat(sender.sent.getFirst().recipient()).isEqualTo("buyer@example.test");
         assertThat(sender.sent.getFirst().body()).contains(event.seatId()).contains(event.orderId());
         await("the message is acknowledged", () -> messagesOnQueue() == 0);
     }
@@ -175,7 +178,7 @@ class PurchaseConfirmedConsumerIT {
 
     private static PurchaseConfirmedEvent purchase() {
         return new PurchaseConfirmedEvent(UUID.randomUUID().toString(), "evt-notify", "A-7",
-                "cust-1", "gw-ref-1", 12000L);
+                "cust-1", "buyer@example.test", "gw-ref-1", 12000L);
     }
 
     /**

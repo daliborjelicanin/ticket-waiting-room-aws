@@ -1,6 +1,7 @@
 package com.ticketwaitingroom.checkoutpayment.web;
 
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
+import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotFoundException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
 import org.springframework.http.HttpStatus;
@@ -18,9 +19,16 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(OrderNotFoundException.class)
     public ProblemDetail handleOrderNotFound(OrderNotFoundException ex) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
-        problem.setTitle("Order not found");
-        return problem;
+        return notFound(ex.getMessage());
+    }
+
+    /**
+     * Answered identically to an unknown id, deliberately. A 403 would confirm the order
+     * exists, which is enough to walk the id space and learn who bought what.
+     */
+    @ExceptionHandler(NotYoursException.class)
+    public ProblemDetail handleNotYours(NotYoursException ex) {
+        return notFound(ex.getMessage());
     }
 
     @ExceptionHandler(OrderNotPayableException.class)
@@ -48,6 +56,12 @@ public class ApiExceptionHandler {
     public ProblemDetail handleIllegalState(IllegalStateException ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
         problem.setTitle("Illegal state transition");
+        return problem;
+    }
+
+    private static ProblemDetail notFound(String detail) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, detail);
+        problem.setTitle("Order not found");
         return problem;
     }
 }

@@ -229,6 +229,10 @@ Copy the **Invoke URL**: `https://<api-id>.execute-api.eu-central-1.amazonaws.co
 
 ### 8. Verify through the whole edge
 
+> **Since `runbook-cognito-auth.md`**, every one of the curls below answers **401** without
+> an `Authorization: Bearer <access token>` header, and the admin seed needs the ops scope.
+> The routing they prove is unchanged; add the header from that runbook's step 6.
+
 ```bash
 API=https://<api-id>.execute-api.eu-central-1.amazonaws.com/dev
 

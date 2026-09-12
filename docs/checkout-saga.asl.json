@@ -29,6 +29,7 @@
         "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" },
         "Headers": { "Content-Type": "application/json" },
         "RequestBody": {
+          "orderId": "{% $req.orderId %}",
           "eventId": "{% $req.eventId %}",
           "customerRef": "{% $req.customerRef %}",
           "amountCents": "{% $req.amountCents %}",
@@ -124,7 +125,7 @@
       "Arguments": {
         "TopicArn": "__TOPIC_ARN__",
         "Subject": "Ticket purchase confirmed",
-        "Message": "{% $string({ 'orderId': $orderId, 'eventId': $req.eventId, 'seatId': $req.seatId, 'customerRef': $req.customerRef, 'gatewayRef': $payment.gatewayRef, 'amountCents': $req.amountCents }) %}"
+        "Message": "{% $string({ 'orderId': $orderId, 'eventId': $req.eventId, 'seatId': $req.seatId, 'customerRef': $req.customerRef, 'email': $req.email, 'gatewayRef': $payment.gatewayRef, 'amountCents': $req.amountCents }) %}"
       },
       "Retry": [{
         "ErrorEquals": ["States.ALL"],

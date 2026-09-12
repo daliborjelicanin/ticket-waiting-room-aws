@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * Redis-backed FIFO waiting room, one queue per event.
  *
- * <p>The fairness guarantee — first in, first admitted — rests on two things, and neither
+ * <p>The fairness guarantee — first in, first admitted — rests on three things, and none
  * of them is the order requests happen to arrive at the API layer:
  *
  * <ul>
@@ -23,6 +23,10 @@ import java.util.List;
  *   <li>Admission is {@code ZPOPMIN} from the head, so the earliest ticket number always
  *       leaves first, and the pop is atomic: two concurrent admitters get disjoint
  *       batches and no token can be admitted twice.</li>
+ *   <li>A customer holds at most one place, claimed with {@code HSETNX} in the same
+ *       script that enqueues it. Without this the first two guarantees are about
+ *       <em>tokens</em> rather than about <em>people</em>: one actor can join ten thousand
+ *       times, be ordered impeccably fairly, and still take the whole room.</li>
  * </ul>
  *
  * <p>Each operation is a single Lua script, so the multi-command sequences (stamp and
@@ -36,6 +40,7 @@ import java.util.List;
  *   wr:{eventId}:queue     zset, token -&gt; ticket number   (still waiting)
  *   wr:{eventId}:seq       counter, the ticket-number source
  *   wr:{eventId}:admitted  zset, token -&gt; pass expiry     (let through)
+ *   wr:{eventId}:identity  hash, customer -&gt; token        (one place per person)
  * </pre>
  */
 @RequiredArgsConstructor
@@ -51,26 +56,32 @@ public class WaitingRoomQueue {
     private final long keyTtlSeconds;
 
     /**
-     * Put a token in line, or report where it already stands. Idempotent by token: a
-     * re-join keeps the original ticket number, so a client retrying a join whose
-     * response was lost does not surrender its place to everyone who arrived meanwhile.
-     * A token whose admission pass has lapsed re-joins from the back.
+     * Put a customer in line, or report where they already stand.
+     *
+     * <p>Idempotent by <em>identity</em>: a re-join keeps the original ticket number, so a
+     * client retrying a join whose response was lost does not surrender its place to
+     * everyone who arrived meanwhile — and, unlike the token-keyed version this replaces,
+     * it does not need the client to have kept anything for that to hold. A customer whose
+     * admission pass has lapsed re-joins from the back, under the same token.
+     *
+     * @param candidateToken the token to issue if this customer has never joined this
+     *                       event; discarded if they already hold one
      */
-    public QueuePlace join(String eventId, String token, Instant now) {
+    public QueuePlace join(String eventId, String customerRef, String candidateToken, Instant now) {
         List<?> reply = redis.execute(
                 joinScript,
-                List.of(queueKey(eventId), seqKey(eventId), admittedKey(eventId)),
-                token, epochSeconds(now), Long.toString(keyTtlSeconds));
-        return toPlace(eventId, token, reply);
+                List.of(queueKey(eventId), seqKey(eventId), admittedKey(eventId), identityKey(eventId)),
+                customerRef, candidateToken, epochSeconds(now), Long.toString(keyTtlSeconds));
+        return toPlace(eventId, reply);
     }
 
-    /** Read a token's current standing. Never mutates, so it is safe to poll hard. */
-    public QueuePlace place(String eventId, String token, Instant now) {
+    /** Read a customer's current standing. Never mutates, so it is safe to poll hard. */
+    public QueuePlace place(String eventId, String customerRef, Instant now) {
         List<?> reply = redis.execute(
                 positionScript,
-                List.of(queueKey(eventId), admittedKey(eventId)),
-                token, epochSeconds(now));
-        return toPlace(eventId, token, reply);
+                List.of(queueKey(eventId), admittedKey(eventId), identityKey(eventId)),
+                customerRef, epochSeconds(now));
+        return toPlace(eventId, reply);
     }
 
     /**
@@ -84,24 +95,26 @@ public class WaitingRoomQueue {
     public List<String> admitNext(String eventId, int count, Instant admissionExpiresAt, Instant now) {
         List<?> reply = redis.execute(
                 admitScript,
-                List.of(queueKey(eventId), admittedKey(eventId), seqKey(eventId)),
+                List.of(queueKey(eventId), admittedKey(eventId), seqKey(eventId), identityKey(eventId)),
                 Integer.toString(count), epochSeconds(admissionExpiresAt), epochSeconds(now),
                 Long.toString(keyTtlSeconds));
         return reply.stream().map(String.class::cast).toList();
     }
 
     /**
-     * Decodes the {status, position, queueLength, admissionExpiresAt} reply the join and
-     * position scripts share. Both use {@code '0'} for a field that does not apply, since
-     * a genuine nil would truncate the reply array on the way out of Lua.
+     * Decodes the {status, position, queueLength, admissionExpiresAt, token} reply the join
+     * and position scripts share. Both use {@code '0'} — and {@code ''} for the token — for
+     * a field that does not apply, since a genuine nil would truncate the reply array on
+     * the way out of Lua.
      */
-    private static QueuePlace toPlace(String eventId, String token, List<?> reply) {
+    private static QueuePlace toPlace(String eventId, List<?> reply) {
         long position = Long.parseLong((String) reply.get(1));
         // Redis renders sorted-set scores as floating point, so parse wide and narrow.
         double admissionExpiresAt = Double.parseDouble((String) reply.get(3));
+        String token = (String) reply.get(4);
         return new QueuePlace(
                 eventId,
-                token,
+                token.isEmpty() ? null : token,
                 QueueStatus.valueOf((String) reply.get(0)),
                 position > 0 ? position : null,
                 Long.parseLong((String) reply.get(2)),
@@ -122,5 +135,9 @@ public class WaitingRoomQueue {
 
     private static String admittedKey(String eventId) {
         return "wr:{" + eventId + "}:admitted";
+    }
+
+    private static String identityKey(String eventId) {
+        return "wr:{" + eventId + "}:identity";
     }
 }

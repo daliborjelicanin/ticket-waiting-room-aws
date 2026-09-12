@@ -16,27 +16,30 @@ Per-module diagrams, with the internals each service is actually responsible for
 | `hold-cleanup-lambda` | [ARCHITECTURE.md](../hold-cleanup-lambda/ARCHITECTURE.md) | Scan → guarded reclaim, why TTL is not enough |
 | `qr-generation-lambda` | [ARCHITECTURE.md](../qr-generation-lambda/ARCHITECTURE.md) | Bare-id message, deterministic key, partial batch failure |
 | `queue-socket-lambda` | [ARCHITECTURE.md](../queue-socket-lambda/ARCHITECTURE.md) | The admission notifier, the GSI lookup, why the connect routes have no code |
+| `security-starter` | [ARCHITECTURE.md](../security-starter/ARCHITECTURE.md) | The one filter chain every HTTP service runs; what a service declares, what it never has to |
 | `common` | [ARCHITECTURE.md](../common/ARCHITECTURE.md) | Who shares which contract, and what breaks when one drifts |
 
 ---
 
 ## 1. System topology
 
-Solid boxes exist and have run on AWS. Dashed boxes are named in `CLAUDE.md` but belong
-to a later slice — today a Fargate task is reached directly on its public IP.
+Solid boxes exist and have run on AWS. Dashed boxes are built in code and runbook but have
+not yet run there (Cognito, the purchase entry point — `runbook-cognito-auth.md`), or
+belong to a later slice (WAF).
 
 ```mermaid
 flowchart LR
     Browser["Browser / client"]
+    COG["Cognito user pool<br/>ticket-users · scope ticketing/ops"]
 
     subgraph edge["Edge — slice 6"]
         WAF["WAF<br/>rate limit + bot control"]
-        APIGW["API Gateway REST"]
+        APIGW["API Gateway REST<br/>/{proxy+} → ALB, no authorizer<br/>POST /events/{id}/purchase → saga"]
         WSAPI["API Gateway WebSocket"]
-        ALB["ALB"]
+        ALB["ALB<br/>X-Edge-Secret: WAF cannot be bypassed"]
     end
 
-    subgraph fargate["ECS Fargate — one task per bounded context"]
+    subgraph fargate["ECS Fargate — one task per bounded context · each an OAuth2 resource server (security-starter)"]
         WR["waiting-room-service"]
         SI["seat-inventory-service"]
         CP["checkout-payment-service"]
@@ -73,20 +76,22 @@ flowchart LR
 
     SES["SES"]
 
-    Browser --> WAF --> APIGW --> ALB
+    Browser -->|"sign in → access token + ID token"| COG
+    Browser -->|"Bearer access token"| WAF --> APIGW --> ALB
     Browser -->|"wss, one socket per tab"| WSAPI
     WSAPI -->|"$connect / $disconnect<br/><b>AWS service integration — no Lambda</b>"| CONN
-    ALB --> WR & SI & CP & TI
-    Browser -->|"today: public IP"| WR & SI & CP & TI
+    ALB -->|"the JWT is verified <b>here</b>, in each service"| WR & SI & CP & TI
 
     WR --> REDIS
     SI --> DDB
     CP --> PG1
     TI --> PG2
 
-    Browser -->|"start execution"| SFN
+    APIGW -->|"POST …/purchase with the ID token<br/><b>StartExecution — no Lambda</b><br/>sub + email from verified claims → saga input"| SFN
+    SFN -->|"http:invoke via /{proxy+}<br/>Bearer M2M token, scope ticketing/ops"| APIGW
     SFN -->|"hold / release / confirm"| SI
     SFN -->|"create order / charge"| CP
+    COG -.->|"client_credentials<br/>(EventBridge connection)"| SFN
     SFN -->|"sendMessage"| QISS
     SFN -->|"publish"| TOPIC
 
@@ -104,7 +109,7 @@ flowchart LR
     WSN -->|"postToConnection"| WSAPI
 
     classDef planned stroke-dasharray:5 4;
-    class WAF,APIGW,ALB planned;
+    class WAF,COG planned;
 ```
 
 **Why each store is where it is** — the split is the argument the project exists to make:
@@ -116,6 +121,7 @@ flowchart LR
 | Postgres `checkout` | orders, payments | invariants that span rows and involve money — declared as constraints, not application checks |
 | Postgres `ticketing` | tickets | separate bounded context, separate Flyway history, deliberately no FK to orders |
 | S3 | QR images | large immutable blobs served by presigned URL, never proxied through a 0.25-vCPU task |
+| Cognito user pool | identities, one scope | the only issuer. Every service verifies its JWTs itself, so nothing is trusted for *where* it came from — see §6 |
 
 ---
 
@@ -123,11 +129,15 @@ flowchart LR
 
 One seat, happy path. Note where the boundaries are: the saga owns the orchestration,
 each service owns exactly one store, and everything after the capture is asynchronous.
+Every call from the client carries its access token, and every call from the saga carries
+a machine-to-machine token; each service verifies the one it receives.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant C as Client
+    participant COG as Cognito
+    participant E as API Gateway
     participant WR as waiting-room
     participant R as Redis
     participant SFN as Step Functions
@@ -141,22 +151,30 @@ sequenceDiagram
     participant SNS as SNS topic
     participant NS as notification
 
-    C->>WR: POST /events/{e}/queue
-    WR->>R: join.lua — INCR + ZADD
+    C->>COG: InitiateAuth
+    COG-->>C: access token (sub, scope) + ID token (sub, email)
+
+    C->>WR: POST /events/{e}/queue · Bearer access token
+    Note over WR: verify JWT · token_use = access
+    WR->>R: join.lua — HSETNX sub→token, INCR, ZADD
     R-->>WR: WAITING, position 42
     WR-->>C: token
-    Note over C,WR: client polls position — operator admits a batch
+    Note over C,WR: client polls GET /events/{e}/queue as itself — operator admits a batch with the ops scope
     WR->>R: admit.lua — ZPOPMIN n
     R-->>WR: admitted tokens + pass expiry
 
-    C->>SFN: StartExecution
+    C->>E: POST /events/{e}/purchase · ID token · {orderId, seatId, …}
+    Note over E: Cognito authorizer verifies the ID token.<br/>customerRef ← claims.sub, email ← claims.email.<br/>Execution name = orderId
+    E->>SFN: StartExecution
+    E-->>C: 202 {orderId}
+    Note over SFN: every http:invoke below carries a<br/>Bearer M2M token, scope ticketing/ops
     SFN->>SI: POST .../hold
     SI->>D: UpdateItem if status = AVAILABLE
     D-->>SI: ok
     SI-->>SFN: holdId, expiresAt
 
-    SFN->>CP: POST /orders  (idempotencyKey)
-    CP->>PG: insert order PENDING
+    SFN->>CP: POST /orders  (orderId, customerRef, idempotencyKey)
+    CP->>PG: insert order PENDING — id is the client's orderId
     CP-->>SFN: orderId
 
     SFN->>CP: POST /orders/{id}/payment
@@ -171,8 +189,9 @@ sequenceDiagram
     D-->>SI: SOLD
 
     SFN->>Q: sendMessage ticket-issuance-queue
-    SFN->>SNS: publish purchase-confirmed
-    SFN-->>C: Succeeded
+    SFN->>SNS: publish purchase-confirmed (customerRef, email)
+    C->>CP: GET /orders/{orderId} · Bearer access token
+    CP-->>C: PAID — only if the order's customerRef is this sub
 
     Q-->>TI: TicketIssuanceMessage
     TI->>PG: insert ticket  (UNIQUE order_id, seat_id)
@@ -313,14 +332,79 @@ in-memory guard that would last exactly as long as one task.
 The fourth is cheaper still, because an `ADMITTED` frame carries no state transition, only
 news of one: a client that receives it twice learns the same thing twice. What makes the
 whole edge safe to be best-effort is that it is not the only channel — the admission is
-already durable in Redis, and `GET /events/{eventId}/queue/{token}` still reports it. The
+already durable in Redis, and `GET /events/{eventId}/queue` still reports it. The
 socket removes the need to poll; it is not what makes the answer true. That is also why the
 publish is deliberately *not* allowed to fail an admission: `ZPOPMIN` has already happened,
 so a retry driven by a failed announcement would pop a second batch of people.
 
 ---
 
-## 6. Build status by slice
+## 6. Identity and authorization
+
+Every HTTP service verifies the caller's JWT itself — signature, issuer, expiry, and that
+it is an *access* token — through the one filter chain `security-starter` installs. Nothing
+is trusted because of where it came from. What a valid token may then do is decided by two
+claims, and only two:
+
+```mermaid
+flowchart LR
+    subgraph tokens["Who holds what"]
+        CT["customer access token<br/>sub = the person<br/>scope = aws.cognito.signin.user.admin"]
+        MT["machine-to-machine token<br/>sub = the client id<br/>scope = <b>ticketing/ops</b>"]
+        IT["customer ID token<br/>sub + <b>email</b><br/>token_use = id"]
+    end
+
+    subgraph fan["Fan door — any valid access token, as its own sub"]
+        F1["POST · GET /events/{id}/queue"]
+        F2["GET /orders/{id} · POST …/cancel"]
+        F3["GET /orders/{id}/tickets · GET /tickets/{id}/qr"]
+    end
+
+    subgraph ops["Ops door — scope ticketing/ops, or 403 at the filter"]
+        O1["POST /admin/events/{id}/seats"]
+        O2["POST /events/{id}/queue/admit"]
+        O3["every seat-inventory endpoint<br/>hold · release · confirm"]
+        O4["POST /orders · POST /orders/{id}/payment"]
+    end
+
+    P["POST /events/{id}/purchase<br/>API Gateway only — no service behind it"]
+
+    CT --> fan
+    MT --> ops
+    MT --> fan
+    IT --> P
+    IT -.->|"401 — token_use ≠ access"| fan
+    CT -.->|"403"| ops
+```
+
+Three consequences worth holding onto:
+
+- **There is no admin role.** Seeding, admitting and the saga's own steps are opened by one
+  scope that only the `ticket-ops` client can mint. A customer's token is valid, signed by
+  the same pool, and refused before any handler runs — the refusal is the filter's, and
+  every one of them is a test through the real chain.
+- **"Not yours" is 404, never 403.** A 403 confirms the id is real, which is all anyone
+  needs to walk the id space and learn who bought what. For the QR the check runs before
+  the presigned URL is minted: the point is the credential, not the status code.
+- **The customer cannot lie about who is buying.** `customerRef` and `email` enter the
+  saga from the ID token's verified claims at API Gateway; the body may carry them and
+  they are not read. From there every row — order, ticket, confirmation — carries a value
+  the customer never typed.
+
+**One place per person** belongs here too, because it is an authorization property with a
+concurrency proof: `join.lua` claims the customer's token with `HSETNX` in the same round
+trip that enqueues it. Two hundred concurrent joins from one `sub` yield one place. Without
+it the queue's FIFO guarantee is about tokens, not people.
+
+**The trust boundary, stated.** The ALB is internet-facing (Phase 1 forbids a NAT Gateway)
+and `X-Edge-Secret` on its listener rules is no longer what protects identity — the
+services are. The secret's remaining job is to keep traffic from bypassing API Gateway, and
+therefore WAF. Making that structural (an NLB behind a VPC link) is a Phase 2 cost decision,
+not a security one.
+
+---
+
+## 7. Build status by slice
 
 ```mermaid
 flowchart LR
@@ -328,15 +412,15 @@ flowchart LR
     S1 --> S2["2 · hold expiration<br/>EventBridge + Lambda"]
     S2 --> S3["3 · waiting room<br/>ElastiCache Redis"]
     S3 --> S4["4 · checkout saga<br/>Step Functions + RDS + SQS"]
-    S4 --> S5["5 · issuance + notification<br/>code done, AWS pending"]
-    S5 --> S6["6 · edge & auth<br/>ALB, APIGW, Cognito, WAF"]
+    S4 --> S5["5 · issuance + notification<br/>SQS, S3, SNS, SES"]
+    S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket done<br/>Cognito: code proven, AWS pending · WAF pending"]
     S6 --> S7["7 · observability<br/>+ load test"]
     S7 --> S8["8 · wrap-up"]
 
     classDef done fill:#2f6f4f,stroke:#1d4632,color:#fff;
     classDef partial fill:#7a5c1e,stroke:#4d3a13,color:#fff;
     classDef todo stroke-dasharray:5 4;
-    class S0,S1,S2,S3,S4 done;
-    class S5,S6 partial;
+    class S0,S1,S2,S3,S4,S5 done;
+    class S6 partial;
     class S7,S8 todo;
 ```

@@ -82,16 +82,29 @@ public class Order {
         this.updatedAt = now;
     }
 
-    /** Create a PENDING order for seats already held in the inventory service. */
-    public static Order pending(String eventId, String customerRef, long amountCents, String currency,
+    /**
+     * Create a PENDING order for seats already held in the inventory service.
+     *
+     * <p>The id is supplied by the caller rather than minted here. Checkout is started
+     * through API Gateway's Step Functions integration, which answers with an execution
+     * arn and nothing else — so unless the client already knows the id, it has no way to
+     * poll for the outcome of the purchase it just started. Choosing it up front also makes
+     * the primary key a second line of defence beside {@code uq_orders_idempotency_key}:
+     * a replayed request cannot become a second order even if its idempotency key is lost.
+     */
+    public static Order pending(UUID id, String eventId, String customerRef, long amountCents, String currency,
                                 String idempotencyKey, List<OrderSeat> seats, Instant now) {
+        if (id == null) {
+            // A 400 with a name, rather than a null primary key surfacing as a 500 from JPA.
+            throw new IllegalArgumentException("An order must be created with a client-supplied orderId");
+        }
         if (amountCents <= 0) {
             throw new IllegalArgumentException("Order amount must be positive, was " + amountCents);
         }
         if (seats.isEmpty()) {
             throw new IllegalArgumentException("An order must cover at least one seat");
         }
-        return new Order(UUID.randomUUID(), eventId, customerRef, amountCents, currency, idempotencyKey, seats, now);
+        return new Order(id, eventId, customerRef, amountCents, currency, idempotencyKey, seats, now);
     }
 
     public List<OrderSeat> seats() {

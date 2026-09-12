@@ -12,7 +12,8 @@ import static org.mockito.Mockito.mock;
 class PurchaseConfirmationMailerTest {
 
     private static final PurchaseConfirmedEvent EVENT = new PurchaseConfirmedEvent(
-            "6f1c0e0a-0000-4000-8000-000000000001", "evt-1", "A-12", "cust-1", "gw-ref-9", 12000L);
+            "6f1c0e0a-0000-4000-8000-000000000001", "evt-1", "A-12",
+            "b4c1e0a2-1111-4000-8000-000000000009", "buyer@example.test", "gw-ref-9", 12000L);
 
     private final NotificationSender sender = mock(NotificationSender.class);
 
@@ -41,21 +42,23 @@ class PurchaseConfirmationMailerTest {
     }
 
     @Test
-    void sendsToTheFallbackWhenCustomerRefIsNotAnAddress() {
+    void sendsToTheVerifiedAddressFromTheEvent() {
         Email email = mailer("no-reply@example.test", "verified@example.test").render(EVENT);
 
-        // customerRef is an opaque reference — the saga's own test input is "cust-saga-1".
-        assertThat(email.recipient()).isEqualTo("verified@example.test");
+        assertThat(email.recipient()).isEqualTo("buyer@example.test");
     }
 
     @Test
-    void sendsToTheCustomerWhenCustomerRefIsAnAddress() {
-        PurchaseConfirmedEvent withAddress = new PurchaseConfirmedEvent(
-                EVENT.orderId(), "evt-1", "A-12", "buyer@example.test", "gw-ref-9", 12000L);
+    void neverTreatsTheCustomerReferenceAsAnAddress() {
+        // The reference is a Cognito sub. Even if one were shaped like an address, it is an
+        // identifier the caller could once influence -- the address must come from the
+        // verified claim or not at all.
+        PurchaseConfirmedEvent noEmail = new PurchaseConfirmedEvent(
+                EVENT.orderId(), "evt-1", "A-12", "attacker@example.test", null, "gw-ref-9", 12000L);
 
-        Email email = mailer("no-reply@example.test", "verified@example.test").render(withAddress);
+        Email email = mailer("no-reply@example.test", "verified@example.test").render(noEmail);
 
-        assertThat(email.recipient()).isEqualTo("buyer@example.test");
+        assertThat(email.recipient()).isEqualTo("verified@example.test");
     }
 
     private PurchaseConfirmationMailer mailer(String from, String fallback) {

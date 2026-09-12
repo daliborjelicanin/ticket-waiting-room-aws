@@ -20,7 +20,7 @@ flowchart TB
         PUMP["common · SqsMessagePump<br/>virtual-thread consumers, long poll"]
         TIS["TicketIssuanceService<br/><b>not transactional</b> — spans the SQS send"]
         TW["TicketWriter<br/>the transactional unit.<br/>A separate bean because @Transactional is a<br/>proxy and a self-call goes straight past it."]
-        TC["TicketController<br/>GET /orders/{id}/tickets · GET /tickets/{id}/qr<br/><b>read-only</b>"]
+        TC["TicketController<br/>GET /orders/{id}/tickets · GET /tickets/{id}/qr<br/><b>read-only</b> · scoped to the JWT's sub"]
         QD["QrGenerationDispatcher"]
         QS["TicketQrStore<br/>HeadObject + presign"]
     end
@@ -138,7 +138,11 @@ sequenceDiagram
     participant QRL as qr-generation-lambda
 
     Note over QRL,S3: writing the object, asynchronously
-    C->>TC: GET /tickets/{id}/qr
+    C->>TC: GET /tickets/{id}/qr + Bearer access token
+    Note over TC: security-starter's chain verifies the JWT first —<br/>signature, issuer, expiry, token_use=access —<br/>an anonymous request is 401 before this point.<br/>This service declares no rules of its own.
+    alt not this customer's ticket
+        TC-->>C: 404 — identical to an unknown id,<br/>and no signature is ever minted
+    end
     TC->>S3: HeadObject
     alt object exists
         S3-->>TC: 200
@@ -150,8 +154,13 @@ sequenceDiagram
     end
 ```
 
-Two decisions in that diagram:
+Three decisions in that diagram:
 
+- **Ownership is settled before S3 is touched.** A presigned URL is a bearer token for the
+  object, so the check guards the credential rather than the response: a caller who does
+  not own the ticket never causes a signature to exist. It answers 404 rather than 403 for
+  the same reason the listing returns an empty array — a 403 confirms the id is real, which
+  is all anyone needs to walk the id space and learn who bought what.
 - **`HeadObject`, not a flag on the ticket row.** Issuance and rendering are separate
   deployables writing to separate stores; a column here claiming the image exists would be
   a guess about someone else's state, and the presigned URL it produced would 404 in the
@@ -163,6 +172,13 @@ Two decisions in that diagram:
 The bucket blocks all public access. A presigned URL scoped to one key for a few minutes
 is what grants a customer their own ticket and nothing else — streaming the image through
 a 0.25-vCPU Fargate task would buy nothing.
+
+`GET /tickets/{ticketId}` — the URL the QR image itself encodes — is **not implemented**,
+and that is now a deliberate deferral rather than the oversight slice 5 recorded. It is a
+gate-scan endpoint: presented *to* a venue, not read *by* the buyer. What it needs is
+exactly-once redemption, a conditional write in the same family as the seat hold, plus a
+staff population with its own scope and its own devices. That is its own slice, and half of it
+folded into the auth slice would have wasted the good one.
 
 ## Proven
 

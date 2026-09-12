@@ -1,6 +1,7 @@
 package com.ticketwaitingroom.ticketissuance.ticket;
 
 import com.ticketwaitingroom.common.events.TicketIssuanceMessage;
+import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.TicketNotFoundException;
 import com.ticketwaitingroom.ticketissuance.qr.QrGenerationDispatcher;
 import lombok.RequiredArgsConstructor;
@@ -59,14 +60,34 @@ public class TicketIssuanceService {
         return outcome;
     }
 
+    /**
+     * The tickets on an order that belong to this customer.
+     *
+     * <p>Ownership is part of the query, not a filter applied to its results, so there is
+     * no moment at which somebody else's ticket exists in memory here waiting to be
+     * excluded by a line a future edit might drop.
+     */
     @Transactional(readOnly = true)
-    public List<Ticket> findByOrder(UUID orderId) {
-        return ticketRepository.findByOrderIdOrderBySeatId(orderId);
+    public List<Ticket> findByOrder(UUID orderId, String customerRef) {
+        return ticketRepository.findByOrderIdAndCustomerRefOrderBySeatId(orderId, customerRef);
     }
 
+    /**
+     * One ticket, if it is this customer's.
+     *
+     * <p>A single resource cannot answer "nothing" the way a listing can, so a ticket owned
+     * by somebody else raises {@link NotYoursException} — which the exception handler maps
+     * to the same 404 an unknown id produces. The two cases are deliberately
+     * indistinguishable from outside: a ticket id that answered 403 while an unused one
+     * answered 404 would let anyone test ids until one hit.
+     */
     @Transactional(readOnly = true)
-    public Ticket findTicket(UUID ticketId) {
-        return ticketRepository.findById(ticketId)
+    public Ticket findOwnedTicket(UUID ticketId, String customerRef) {
+        Ticket ticket = ticketRepository.findById(ticketId)
                 .orElseThrow(() -> new TicketNotFoundException("No ticket " + ticketId));
+        if (!customerRef.equals(ticket.getCustomerRef())) {
+            throw new NotYoursException("No ticket " + ticketId);
+        }
+        return ticket;
     }
 }

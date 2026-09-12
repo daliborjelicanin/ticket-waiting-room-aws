@@ -128,6 +128,12 @@ so that a state machine definition never contains a secret.
 
 Our services do not check the header and ignore it as an unknown one. The connection is
 required machinery, not real authentication — slice 6 replaces it when Cognito arrives.
+
+> **Superseded by `runbook-cognito-auth.md` §8.** The connection is now
+> `OAUTH_CLIENT_CREDENTIALS` against the Cognito token endpoint, and the services verify the
+> bearer token it produces. The steps above are kept as the record of what slice 4 built;
+> a fresh rebuild should follow the Cognito runbook for this section, and note that
+> `POST /orders` now requires a client-supplied `orderId` in its body.
 Creating it also creates a managed secret under `events!connection/…`, which the execution
 role must be allowed to read.
 

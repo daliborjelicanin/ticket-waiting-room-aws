@@ -1,6 +1,17 @@
 spring:
   application:
     name: seat-inventory-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # The Cognito user pool's issuer, e.g.
+          #   https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_XXXXXXXXX
+          # Required: security-starter refuses to start the service without one, by name --
+          # an identity-checking service with no identity provider is misconfigured, not
+          # degraded. Locally this points at the real pool: JWKS is a public GET, no
+          # credentials, and the pool is free.
+          issuer-uri: ${COGNITO_ISSUER_URI:}
 
 seat-inventory:
   table-name: seat-inventory

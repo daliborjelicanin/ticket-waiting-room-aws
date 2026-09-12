@@ -113,7 +113,7 @@ the test disagrees with the reader the moment either side drifts.
 flowchart TB
     A["admit.lua ZPOPMIN — <b>durable</b>"] --> B["Redis: token in the admitted zset"]
     A --> C["queue-admissions → notifier → frame"]
-    B --> D["GET /events/{id}/queue/{token}<br/><b>the source of truth</b>"]
+    B --> D["GET /events/{id}/queue<br/><b>the source of truth</b>"]
     C --> E["the socket — an <b>optimisation</b> over polling"]
 
     N["Everything questionable about this edge is survivable because of that split:<br/>the GSI read is eventually consistent, so a token admitted milliseconds after<br/>connecting can be missed; a redelivered message sends a second frame; a socket<br/>that closed without a $disconnect answers 410. None of it can make the answer<br/>wrong — only make a client fall back to the poll it already knows how to do."] -.- D

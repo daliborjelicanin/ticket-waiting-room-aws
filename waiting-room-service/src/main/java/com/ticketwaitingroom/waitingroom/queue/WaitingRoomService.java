@@ -6,7 +6,6 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -16,9 +15,9 @@ import java.util.UUID;
 
 /**
  * Application service for the waiting room: join the line, check your place, admit the
- * next batch. Mints token identity and admission deadlines and supplies the current time;
- * the ordering and atomicity guarantees are entirely {@link WaitingRoomQueue}'s, and this
- * layer adds no locking of its own.
+ * next batch. Mints candidate tokens and admission deadlines and supplies the current
+ * time; the ordering, atomicity and one-place-per-person guarantees are entirely
+ * {@link WaitingRoomQueue}'s, and this layer adds no locking of its own.
  */
 @Service
 @RequiredArgsConstructor
@@ -32,28 +31,31 @@ public class WaitingRoomService {
     private final Clock clock;
 
     /**
-     * Join the queue for an event.
+     * Join the queue for an event, or report the place this customer already holds.
      *
-     * @param token an existing token to re-join under, or {@code null}/blank to be issued
-     *              a fresh one. Passing the token back makes the call idempotent, which
-     *              is what keeps a retried join from costing the client its place.
+     * <p>The token minted here is only a <em>candidate</em>: the script discards it if
+     * this customer already has one. Generating it unconditionally costs a UUID and keeps
+     * the whole operation one round trip, where checking first would be a read, a decision
+     * and a write with a race in the middle of them.
+     *
+     * @param customerRef the authenticated caller's {@code sub}; never blank, because the
+     *                    security filter has already refused anonymous requests
      */
-    public QueuePlace join(String eventId, String token) {
-        String queueToken = StringUtils.hasText(token) ? token : UUID.randomUUID().toString();
-        return queue.join(eventId, queueToken, clock.instant());
+    public QueuePlace join(String eventId, String customerRef) {
+        return queue.join(eventId, customerRef, UUID.randomUUID().toString(), clock.instant());
     }
 
     /**
-     * Look up a token's standing.
+     * Look up a customer's standing.
      *
-     * @throws UnknownQueueTokenException if the token is not in the queue and holds no
-     *                                    admission pass
+     * @throws UnknownQueueTokenException if this customer holds no place and no admission
+     *                                    pass for the event
      */
-    public QueuePlace place(String eventId, String token) {
-        QueuePlace place = queue.place(eventId, token, clock.instant());
+    public QueuePlace place(String eventId, String customerRef) {
+        QueuePlace place = queue.place(eventId, customerRef, clock.instant());
         if (place.status() == QueueStatus.NOT_QUEUED) {
             throw new UnknownQueueTokenException(
-                    "Token " + token + " is not in the waiting room for event " + eventId);
+                    "No place in the waiting room for event " + eventId);
         }
         return place;
     }
@@ -87,8 +89,8 @@ public class WaitingRoomService {
      * the tokens are already out of the queue — {@code ZPOPMIN} does not roll back — so
      * throwing would report failure for work that succeeded, and the caller's natural retry
      * would pop a second batch of people who were never told either. Swallowing costs at
-     * most a notification, and clients still hold
-     * {@code GET /events/{eventId}/queue/{token}} as the source of truth.
+     * most a notification, and clients still hold {@code GET /events/{eventId}/queue} as
+     * the source of truth.
      */
     private void announce(String eventId, List<String> tokens, Instant admissionExpiresAt) {
         if (tokens.isEmpty()) {

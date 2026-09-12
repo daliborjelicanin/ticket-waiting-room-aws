@@ -8,6 +8,8 @@ import com.ticketwaitingroom.checkoutpayment.payment.ChargeOutcome;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,9 +21,18 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * HTTP surface for checkout. Both mutating endpoints take a caller-supplied idempotency
- * key, because the Step Functions saga retries them and a retry must never become a second
- * order or a second charge.
+ * HTTP surface for checkout, split across the two doors.
+ *
+ * <p>{@code POST /orders} and {@code POST /orders/{id}/payment} are <strong>saga</strong>
+ * endpoints: {@code SecurityConfig} admits only a token carrying the ops scope, which
+ * Step Functions presents. They take a caller-supplied idempotency key, because the saga
+ * retries them and a retry must never become a second order or a second charge. The
+ * customer's identity arrives in the body: the saga is trusted to name the customer
+ * because its input was built by API Gateway from that customer's own verified token.
+ *
+ * <p>{@code GET /orders/{id}} and {@code POST /orders/{id}/cancel} are
+ * <strong>fan-door</strong> endpoints, scoped to the {@code sub} of whatever JWT the
+ * customer presented.
  */
 @RestController
 @RequiredArgsConstructor
@@ -33,6 +44,7 @@ public class CheckoutController {
     @ResponseStatus(HttpStatus.CREATED)
     public OrderResponse createOrder(@RequestBody CreateOrderRequest request) {
         Order order = checkoutService.createOrder(
+                request.orderId(),
                 request.eventId(),
                 request.customerRef(),
                 request.amountCents(),
@@ -42,8 +54,8 @@ public class CheckoutController {
     }
 
     @GetMapping("/orders/{orderId}")
-    public OrderResponse getOrder(@PathVariable UUID orderId) {
-        return OrderResponse.of(checkoutService.findOrder(orderId));
+    public OrderResponse getOrder(@PathVariable UUID orderId, @AuthenticationPrincipal Jwt caller) {
+        return OrderResponse.of(checkoutService.findOrder(orderId, caller.getSubject()));
     }
 
     @PostMapping("/orders/{orderId}/payment")
@@ -58,13 +70,13 @@ public class CheckoutController {
     }
 
     @PostMapping("/orders/{orderId}/cancel")
-    public OrderResponse cancel(@PathVariable UUID orderId) {
-        return OrderResponse.of(checkoutService.cancel(orderId));
+    public OrderResponse cancel(@PathVariable UUID orderId, @AuthenticationPrincipal Jwt caller) {
+        return OrderResponse.of(checkoutService.cancel(orderId, caller.getSubject()));
     }
 
     public record SeatRef(String seatId, String holdId) { }
 
-    public record CreateOrderRequest(String eventId, String customerRef, long amountCents,
+    public record CreateOrderRequest(UUID orderId, String eventId, String customerRef, long amountCents,
                                      String idempotencyKey, List<SeatRef> seats) { }
 
     public record ChargeRequest(String idempotencyKey, String paymentToken) { }

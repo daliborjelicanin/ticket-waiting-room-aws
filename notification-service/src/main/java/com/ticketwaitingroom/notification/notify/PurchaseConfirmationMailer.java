@@ -57,14 +57,19 @@ public class PurchaseConfirmationMailer {
     }
 
     /**
-     * {@code customerRef} is an opaque customer reference, not an address — the saga's own
-     * test input uses {@code cust-saga-1}. Treating it as an address when it happens to look
-     * like one keeps a real end-to-end run honest, and everything else goes to the single
-     * verified sandbox identity rather than failing the send.
+     * The address comes from {@code email} — the verified Cognito claim, injected by API
+     * Gateway rather than read from the request body, so a purchase cannot have its
+     * confirmation redirected to whoever asked for it.
+     *
+     * <p>{@code customerRef} is deliberately not consulted: it now carries a Cognito
+     * {@code sub}, which never looks like an address, so the older "use it if it contains
+     * an @" rule would silently send every mail to the fallback and look like it worked.
+     * The fallback remains for the SES sandbox, which only delivers to verified identities
+     * anyway.
      */
     private String recipientFor(PurchaseConfirmedEvent event) {
-        String customerRef = event.customerRef();
-        return customerRef != null && customerRef.contains("@") ? customerRef : properties.fallbackRecipient();
+        String email = event.email();
+        return email != null && email.contains("@") ? email : properties.fallbackRecipient();
     }
 
     private static String formatAmount(long amountCents) {

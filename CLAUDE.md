@@ -56,6 +56,14 @@ alters its behaviour, and mark not-yet-built boxes as such.
   declared again by the services that use the pump — exporting it put the SDK's
   Apache 5 and Netty HTTP stacks back into both Lambda images, which had spent
   slice 2 removing them. Services depend on `common`, never the reverse.
+- `security-starter` — `java-library`, a Spring Boot starter in the Boot sense: one
+  auto-configuration that makes a service an OAuth2 resource server for the Cognito user
+  pool (JWT verified in the service itself — signature, issuer, expiry, and `token_use =
+  access` so an ID token is never accepted as an API credential). A service adds the
+  dependency and declares only its own path rules as `EndpointAuthorization` beans;
+  everything not declared needs a valid token and nothing more. Kept out of `common`
+  because the Lambdas share `common` and must never see Spring Security. Registers itself
+  for `@WebMvcTest` slices the way Boot's own starters do.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.
@@ -136,7 +144,9 @@ hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate ser
 - Step Functions — orchestrates the checkout saga: hold seats → charge payment → issue tickets → notify, with compensation (release seats) on payment failure
 
 **Security**
-- Cognito — auth, including guest checkout
+- Cognito — user pool for buyers; a resource server + M2M app client for the saga and
+  operators. Registration is required to join the queue: a per-account ticket limit is
+  unenforceable without an account, and guest checkout hands a scalper unlimited identities
 - IAM — distinct least-privilege role per service
 - Secrets Manager — payment gateway keys, DB credentials
 - KMS — encryption at rest for RDS/S3

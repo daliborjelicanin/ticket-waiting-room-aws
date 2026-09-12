@@ -18,7 +18,8 @@ These override convenience everywhere in Phase 1:
 - **Deferred until their slice, then session-only**: ALB, WAF, RDS, ElastiCache,
   Route 53 custom domain (optional entirely — $12/yr + $0.50/mo hosted zone).
 - **Free or negligible at learning traffic** (safe to leave configured): DynamoDB,
-  SQS, SNS, EventBridge, Step Functions, Lambda, S3, ECR (<1 GB), Cognito, CloudWatch
+  SQS, SNS, EventBridge, Step Functions, Lambda, S3, ECR (~1.1 GB, ≈$0.06/mo past the
+  500 MB free tier — the only standing charge), Cognito, CloudWatch
   logs (short retention), IAM.
 - **Account guardrails before anything else**: AWS Budget alert at $10/mo,
   billing alarm, short CloudWatch log retention (1–3 days), everything tagged
@@ -229,7 +230,12 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       one call produced 3 frames, each routed to its own socket** — the `SendMessageBatch` path
       against real SQS. No publish `WARN`, DLQ 0. ElastiCache + task torn down after
       (2026-09-06)
-- [ ] Cognito user pool + guest checkout flow
+- [ ] Cognito user pool + identity-bound queue — every service an OAuth2 resource server
+      (`security-starter`), ops scope for the saga and operators, one live queue place per
+      `sub` enforced atomically in `join.lua`. Guest checkout dropped: a per-account ticket
+      limit is unenforceable without an account. Code done and proven locally
+      (**200 concurrent joins from one identity → 1 place**; customer token on any ops
+      endpoint → 403 at the filter); AWS half in `runbook-cognito-auth.md`
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
 - **Learn:** APIGW ↔ ALB integration, WebSocket APIs, Cognito, WAF rules

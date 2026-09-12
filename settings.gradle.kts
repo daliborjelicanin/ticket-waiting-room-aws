@@ -6,6 +6,7 @@ rootProject.name = "ticket-waiting-room"
 
 include(
     "common",
+    "security-starter",
     "waiting-room-service",
     "seat-inventory-service",
     "checkout-payment-service",

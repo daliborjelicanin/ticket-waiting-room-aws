@@ -38,6 +38,12 @@ public final class TicketQrObjects {
      * What the QR image encodes: the URL a gate scanner would open to validate the ticket.
      * Encoding a URL rather than a bare id means a phone camera does something useful with
      * it, and it keeps the verification host out of the stored object's name.
+     *
+     * <p>The endpoint it points at does not exist yet, deliberately. Redemption has to be
+     * exactly-once — a conditional write in the same family as the seat hold — and it
+     * serves venue staff rather than buyers, so it is its own slice rather than a read
+     * endpoint bolted onto this one. Until then the URL is a stable promise, not a live
+     * link, and nothing else in the system dereferences it.
      */
     public static String verificationUrl(String baseUrl, String ticketId) {
         String root = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;

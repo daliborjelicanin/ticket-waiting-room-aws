@@ -15,7 +15,7 @@ flowchart TB
     SFN["Step Functions saga<br/>retries every call — so every<br/>mutating endpoint takes an idempotency key"]
 
     subgraph svc["checkout-payment-service — ECS Fargate task"]
-        CC["CheckoutController<br/>POST /orders · GET /orders/{id}<br/>POST /orders/{id}/payment · POST /orders/{id}/cancel"]
+        CC["CheckoutController<br/>saga door (ops scope): POST /orders · POST /orders/{id}/payment<br/>fan door (any token): GET /orders/{id} · POST /orders/{id}/cancel<br/>fan door is scoped to the JWT's sub"]
         CS["CheckoutService<br/><b>not transactional</b> — spans the gateway call"]
         PS["PaymentService<br/>the two transactional units"]
         OR["OrderRepository"]

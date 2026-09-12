@@ -38,7 +38,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Runs against a real Redis (Testcontainers) rather than a mock, because the whole
  * guarantee lives in Redis semantics — the atomicity of {@code INCR}, of {@code ZPOPMIN},
- * and of a Lua script as a unit. A mocked client would assert nothing about any of them.
+ * of {@code HSETNX}, and of a Lua script as a unit. A mocked client would assert nothing
+ * about any of them.
+ *
+ * <p>The two tests that matter most sit next to each other and say opposite things:
+ * {@link #concurrentJoinersGetDistinctContiguousPlaces} proves 200 people racing get 200
+ * distinct places, and {@link #concurrentJoinsByOneIdentityYieldOnePlace} proves 200
+ * threads racing as <em>one</em> person get exactly one. Either alone is a half-truth.
  *
  * <p>Each test gets its own event id, so the per-event keys never collide and the tests
  * stay independent without flushing a shared server.
@@ -88,7 +94,7 @@ class WaitingRoomFairnessIT {
         Instant now = Instant.now();
         QueuePlace[] places = new QueuePlace[joiners];
 
-        race(joiners, i -> places[i] = queue.join(eventId, "t-" + i, now));
+        race(joiners, i -> places[i] = queue.join(eventId, "cust-" + i, "t-" + i, now));
 
         assertThat(places).allSatisfy(place -> assertThat(place.status()).isEqualTo(QueueStatus.WAITING));
         assertThat(places)
@@ -96,7 +102,7 @@ class WaitingRoomFairnessIT {
                 .extracting(QueuePlace::position)
                 .containsExactlyInAnyOrderElementsOf(
                         IntStream.rangeClosed(1, joiners).mapToObj(Long::valueOf).toList());
-        assertThat(queue.place(eventId, "t-0", now).queueLength()).isEqualTo(joiners);
+        assertThat(queue.place(eventId, "cust-0", now).queueLength()).isEqualTo(joiners);
     }
 
     @Test
@@ -105,7 +111,7 @@ class WaitingRoomFairnessIT {
         Instant now = Instant.now();
         QueuePlace[] places = new QueuePlace[joiners];
 
-        race(joiners, i -> places[i] = queue.join(eventId, "t-" + i, now));
+        race(joiners, i -> places[i] = queue.join(eventId, "cust-" + i, "t-" + i, now));
 
         // Whatever order the threads actually reached Redis in, each was told a place.
         // Admission must honour exactly that, or the number shown to a user is a lie.
@@ -123,7 +129,7 @@ class WaitingRoomFairnessIT {
     void admissionIsFifoAcrossBatches() {
         Instant now = Instant.now();
         List<String> joinOrder = IntStream.range(0, 50).mapToObj(i -> "t-" + i).toList();
-        joinOrder.forEach(token -> queue.join(eventId, token, now));
+        joinOrder.forEach(token -> queue.join(eventId, "cust-" + token, token, now));
 
         assertThat(drain(now, 7))
                 .as("batch boundaries must not reorder or drop anyone")
@@ -135,7 +141,7 @@ class WaitingRoomFairnessIT {
         int joiners = 120;
         int admitters = 12;
         Instant now = Instant.now();
-        IntStream.range(0, joiners).forEach(i -> queue.join(eventId, "t-" + i, now));
+        IntStream.range(0, joiners).forEach(i -> queue.join(eventId, "cust-" + i, "t-" + i, now));
 
         Queue<String> admitted = new ConcurrentLinkedQueue<>();
         // Between them the admitters ask for far more than the queue holds, so they race
@@ -144,90 +150,137 @@ class WaitingRoomFairnessIT {
 
         assertThat(admitted).as("every token admitted exactly once").doesNotHaveDuplicates();
         assertThat(admitted).hasSize(joiners);
-        assertThat(queue.place(eventId, "t-0", now).queueLength()).isZero();
+        assertThat(queue.place(eventId, "cust-0", now).queueLength()).isZero();
     }
 
     @Test
-    void rejoiningKeepsTheOriginalPlace() {
+    void concurrentJoinsByOneIdentityYieldOnePlace() throws InterruptedException {
+        int attempts = 200;
         Instant now = Instant.now();
-        queue.join(eventId, "first", now);
-        queue.join(eventId, "second", now);
+        QueuePlace[] places = new QueuePlace[attempts];
 
-        QueuePlace rejoined = queue.join(eventId, "first", now);
+        // Every thread offers a different candidate token, which is exactly what a client
+        // looping the join endpoint would do. Only one candidate may ever be claimed.
+        race(attempts, i -> places[i] = queue.join(eventId, "cust-1", "candidate-" + i, now));
+
+        assertThat(places)
+                .as("one person holds one place, however hard they race themselves")
+                .allSatisfy(place -> assertThat(place.position()).isEqualTo(1L));
+        assertThat(places)
+                .extracting(QueuePlace::token)
+                .as("and every attempt is told the same token")
+                .containsOnly(places[0].token());
+        assertThat(queue.place(eventId, "cust-1", now).queueLength()).isEqualTo(1);
+    }
+
+    @Test
+    void oneIdentityCannotOutnumberTheRoom() throws InterruptedException {
+        Instant now = Instant.now();
+        // A scalper hammering the join endpoint against nine ordinary people. Without the
+        // identity claim the queue would be 209 long and 200 of the places would be theirs.
+        race(200, i -> queue.join(eventId, "scalper", "candidate-" + i, now));
+        IntStream.range(0, 9).forEach(i -> queue.join(eventId, "cust-" + i, "t-" + i, now));
+
+        assertThat(queue.place(eventId, "scalper", now).queueLength())
+                .as("ten people in the room, not two hundred and nine")
+                .isEqualTo(10);
+    }
+
+    @Test
+    void rejoiningKeepsTheOriginalPlaceWithoutTheClientRememberingAnything() {
+        Instant now = Instant.now();
+        QueuePlace first = queue.join(eventId, "cust-1", "candidate-a", now);
+        queue.join(eventId, "cust-2", "t-2", now);
+
+        // A different candidate token, as a client that lost its response would send.
+        QueuePlace rejoined = queue.join(eventId, "cust-1", "candidate-b", now);
 
         assertThat(rejoined.position()).as("a retried join must not cost the client its place").isEqualTo(1L);
+        assertThat(rejoined.token())
+                .as("identity, not the token, is what makes the join idempotent")
+                .isEqualTo(first.token());
         assertThat(rejoined.queueLength()).isEqualTo(2);
     }
 
     @Test
     void positionFallsAsThePeopleAheadAreAdmitted() {
         Instant now = Instant.now();
-        IntStream.range(0, 10).forEach(i -> queue.join(eventId, "t-" + i, now));
-        assertThat(queue.place(eventId, "t-9", now).position()).isEqualTo(10L);
+        IntStream.range(0, 10).forEach(i -> queue.join(eventId, "cust-" + i, "t-" + i, now));
+        assertThat(queue.place(eventId, "cust-9", now).position()).isEqualTo(10L);
 
         queue.admitNext(eventId, 4, now.plusSeconds(600), now);
 
-        QueuePlace place = queue.place(eventId, "t-9", now);
+        QueuePlace place = queue.place(eventId, "cust-9", now);
         assertThat(place.position()).isEqualTo(6L);
         assertThat(place.queueLength()).isEqualTo(6);
     }
 
     @Test
-    void admittedTokenLeavesTheQueueAndCarriesAPass() {
+    void admittedCustomerLeavesTheQueueAndCarriesAPass() {
         Instant now = Instant.now();
         Instant passExpiry = now.plusSeconds(600);
-        queue.join(eventId, "t-1", now);
+        queue.join(eventId, "cust-1", "t-1", now);
 
         queue.admitNext(eventId, 1, passExpiry, now);
 
-        QueuePlace place = queue.place(eventId, "t-1", now);
+        QueuePlace place = queue.place(eventId, "cust-1", now);
         assertThat(place.status()).isEqualTo(QueueStatus.ADMITTED);
+        assertThat(place.token()).as("still resolvable by identity once out of the queue").isEqualTo("t-1");
         assertThat(place.position()).isNull();
         assertThat(place.queueLength()).isZero();
         assertThat(place.admissionExpiresAt()).isEqualTo(passExpiry.truncatedTo(ChronoUnit.SECONDS));
-        assertThat(queue.join(eventId, "t-1", now).status())
-                .as("re-joining while admitted must not put the token back in line")
+
+        QueuePlace rejoined = queue.join(eventId, "cust-1", "candidate-b", now);
+        assertThat(rejoined.status())
+                .as("re-joining while admitted must not put the customer back in line")
                 .isEqualTo(QueueStatus.ADMITTED);
+        assertThat(rejoined.token())
+                .as("nor mint a second token, which would strand the pass on the first")
+                .isEqualTo("t-1");
     }
 
     @Test
     void lapsedPassIsReportedThenReclaimedOnTheNextAdmit() {
         Instant now = Instant.now();
-        queue.join(eventId, "t-1", now);
+        queue.join(eventId, "cust-1", "t-1", now);
         queue.admitNext(eventId, 1, now.plusSeconds(60), now);
         Instant afterLapse = now.plusSeconds(61);
 
-        assertThat(queue.place(eventId, "t-1", afterLapse).status()).isEqualTo(QueueStatus.EXPIRED);
+        assertThat(queue.place(eventId, "cust-1", afterLapse).status()).isEqualTo(QueueStatus.EXPIRED);
 
-        queue.join(eventId, "t-2", afterLapse);
+        queue.join(eventId, "cust-2", "t-2", afterLapse);
         assertThat(queue.admitNext(eventId, 5, afterLapse.plusSeconds(60), afterLapse)).containsExactly("t-2");
-        assertThat(queue.place(eventId, "t-1", afterLapse).status())
+        assertThat(queue.place(eventId, "cust-1", afterLapse).status())
                 .as("the abandoned slot is returned to the room")
                 .isEqualTo(QueueStatus.NOT_QUEUED);
     }
 
     @Test
-    void tokenWithALapsedPassRejoinsFromTheBack() {
+    void customerWithALapsedPassRejoinsFromTheBackUnderTheSameToken() {
         Instant now = Instant.now();
-        queue.join(eventId, "t-1", now);
+        queue.join(eventId, "cust-1", "t-1", now);
         queue.admitNext(eventId, 1, now.plusSeconds(60), now);
         Instant afterLapse = now.plusSeconds(61);
-        queue.join(eventId, "t-2", afterLapse);
+        queue.join(eventId, "cust-2", "t-2", afterLapse);
 
-        QueuePlace rejoined = queue.join(eventId, "t-1", afterLapse);
+        QueuePlace rejoined = queue.join(eventId, "cust-1", "candidate-b", afterLapse);
 
         assertThat(rejoined.status()).isEqualTo(QueueStatus.WAITING);
         assertThat(rejoined.position())
                 .as("a forfeited slot does not buy back the original place")
                 .isEqualTo(2L);
+        assertThat(rejoined.token())
+                .as("a lapsed pass must not be a way to acquire a second token")
+                .isEqualTo("t-1");
     }
 
     @Test
-    void unknownTokenIsNotQueued() {
+    void unknownCustomerIsNotQueued() {
         QueuePlace place = queue.place(eventId, "never-seen", Instant.now());
 
         assertThat(place.status()).isEqualTo(QueueStatus.NOT_QUEUED);
         assertThat(place.position()).isNull();
+        assertThat(place.token()).isNull();
     }
 
     @Test
