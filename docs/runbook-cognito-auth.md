@@ -9,9 +9,10 @@ builds on and changes in two places), `runbook-checkout-saga.md` (the state mach
 EventBridge connection, one of which is redefined and the other replaced),
 `runbook-ecr-packaging.md` (every service image is rebuilt).
 
-**Status: written ahead of the session, not yet executed.** The code half is done and
-proven locally — see *Proven Before Touching AWS*. The *Results* section is the list of
-claims the session has to turn into numbers.
+**Status: executed and verified end-to-end on AWS (2026-09-12).** Four purchases through
+the new entry point `SUCCEEDED`; all thirteen claims in *Results* are answered with numbers.
+Session-only resources torn down the same afternoon; the pool, its clients and the new
+`/purchase` method stay, at $0.
 
 ## Design Decisions Made Before Touching the Console
 
@@ -564,23 +565,69 @@ aws elbv2 describe-target-health --target-group-arn <checkout-tg>
 
 ## Results
 
-*To be filled during the session. Each entry answers one numbered claim above.*
+*Session of 2026-09-12. Stack up at 14:27:57 local; RDS, ElastiCache and the ALB all
+available by 14:32:42 (under five minutes, started together); four targets healthy at
+14:36:44, zero stopped tasks. Claims verified so far are filled; the rest await the
+`/purchase` half.*
 
 | # | Claim | Result |
 |---|---|---|
-| 1 | anonymous → 401 from the service, `WWW-Authenticate: Bearer` | |
-| 2 | customer seeding → 403; **no line in the seat-inventory log group** | |
-| 3 | 50 concurrent joins as one identity → 1 token, count 50 | |
-| 4 | customer admit → 403; operator admit → 200 | |
-| 5 | purchase: `customerRef` = alice's `sub`, body value ignored | |
-| 6 | retry → `ExecutionAlreadyExists`, order unchanged | |
-| 7 | bob → 404 ×3, byte-identical to an unknown id | |
-| 8 | ID token at a service → 401 | |
-| 9 | customer `POST /orders` → 403 | |
-| 10 | mail to the verified claim | |
-| 11 | saga's calls carry the M2M `sub` | |
-| 12 | first-token latency vs. steady state | |
-| 13 | target healthy on 401 | |
+| 1 | anonymous → 401 from the service, `WWW-Authenticate: Bearer` | **Yes.** Through the ALB with the edge secret and no token: `401`, `WWW-Authenticate: Bearer resource_metadata=…` — the service's own challenge, not API Gateway's |
+| 2 | customer seeding → 403; **no line in the seat-inventory log group** | **Yes.** alice → `403`; operator → `201 {"created":2}`. **Zero** lines matching 403/forbidden/denied in `/ecs/seat-inventory-service` — the request died at the filter |
+| 3 | 50 concurrent joins as one identity → 1 token, count 50 | **Yes.** `50 22da9c96-…` — one token, count 50, through API Gateway → ALB → Fargate → ElastiCache |
+| 4 | customer admit → 403; operator admit → 200 | **Yes.** alice `403`; operator `200 {"admitted":1}` |
+| 5 | purchase: `customerRef` = alice's `sub`, body value ignored | **Yes.** Body carried `"customerRef":"forged"`; the execution input carried `33849842-…` and `email` from the ID token's claims. Saga `SUCCEEDED` in 8 s: `HoldSeat → CreateOrder → ChargePayment → ConfirmPurchase → EnqueueTicketIssuance → NotifyPurchaseConfirmed`. Order `PAID`, seat `SOLD`, ticket issued, all DLQs empty |
+| 6 | retry → `ExecutionAlreadyExists`, order unchanged | **Yes.** `400 {"error":"…#ExecutionAlreadyExists"}` from the `4\d{2}` integration response; the first execution untouched |
+| 7 | bob → 404 ×3, byte-identical to an unknown id | **Yes, with one correction to the claim.** Order → `404 {"detail":"No order …"}`, QR → `404 {"detail":"No ticket …"}`, both identical to an unknown id. The tickets *listing* → **`200 []`** — the designed answer (ownership is in the query, an empty list is indistinguishable from "not issued yet"), and the claim as written was wrong, not the code. Alice's QR: `READY`, presigned URL served a 1,185-byte PNG |
+| 8 | ID token at a service → 401 | **Yes.** `GET /orders/{id}` with alice's ID token → `401` through the whole edge |
+| 9 | customer `POST /orders` → 403 | **Yes.** `403` at the filter |
+| 10 | mail to the verified claim | **Yes, in two steps.** Purchase 1: SES **rejected** `alice@example.test` — *"Email address is not verified"* — the sandbox doing what `runbook-notifications.md` said it would; the message retried and landed in the DLQ, which is at-least-once working. The address had come from the verified *claim*, not the body — the design held; delivery needed an SES-verified recipient. alice's email was re-pointed at the `NOTIFICATION_TO` identity; purchases 2–4: `sent purchase confirmation` ×3, no rejection |
+| 11 | saga's calls carry the M2M `sub` | **Yes, by construction rather than by log line.** The services do not log the caller. But `POST /orders` and `/payment` are ops-scoped — alice's token gets `403` on them (claim 9) — and the saga created and charged four orders through the same edge. Only a token carrying `ticketing/ops` can have done that, and only `ticket-ops` can mint one. The connection went `AUTHORIZED` within a minute of creation |
+| 12 | first-token latency vs. steady state | **12.8 s** for the first token a task ever sees, **0.50 s** for the next — locally it was 629 ms vs 6.6 ms. The 20× spread on a 0.25-vCPU task is the discovery + JWKS fetch *plus* the JIT compiling the whole Nimbus/Security stack on a cold JVM. Startup itself was 1.4 s (`Started … in 1.447 s`) — the supplier kept the pool off the boot path exactly as intended; it moved the cost onto the first customer instead. See *Follow-up* |
+| 13 | target healthy on 401 | **Yes.** All four targets `healthy` within ~2 min of service creation, with `GET /` answering `401` behind the `200-499` matcher |
+
+### Follow-up from claim 12
+
+A 12.8 s first request is not acceptable for the first customer after every deploy, and the
+fix is small: warm the decoder on `ApplicationReadyEvent` — decode nothing, just trigger
+the JWKS fetch — so startup still never *waits* on the pool but the cost lands before the
+first request rather than on it. Not done in this session; recorded rather than hidden.
+
+### Traps hit in the `/purchase` half
+
+- **`StartExecution` returns no `name`.** The first 202 body had `"orderId": ""`. Derive
+  it from `executionArn` instead — and in Velocity that takes two `#set`s, because
+  arithmetic is not allowed inside a method argument
+  (`$arn.substring($arn.lastIndexOf(":") + 1)` is a template error;
+  `#set($cut = … + 1)` then `$arn.substring($cut)` is not).
+- **A stage deployment takes seconds to propagate.** Two purchases fired within a second
+  of `create-deployment` got `500 Internal server error` from a template that
+  `test-invoke-method` showed working perfectly. Wait, or test-invoke first — it prints the
+  execution log, which the deployed stage does not.
+- **`HeadObject` on a missing key is 403 without `s3:ListBucket`.** `TicketQrStore.exists()`
+  catches `NoSuchKeyException`, so alice's QR answered **500** while the object did not yet
+  exist. Latent since slice 5 — the Lambda always won the race then — and exposed now
+  because **the `qr-generation` event source mapping had been left `Disabled` by a previous
+  teardown**. Fixed both: `ticket-issuance-task-role` gains `s3:ListBucket` on the bucket
+  with `s3:prefix = tickets/*`; the mapping is re-enabled. Add both to
+  `runbook-ticket-issuance.md`'s bring-up.
+- **Changing a user's email moves their sign-in alias.** After `admin-update-user-attributes`,
+  `admin-get-user --username alice@example.test` is `UserNotFoundException`; the user is
+  reachable by `sub`, and signs in with the new address. Tokens must be re-minted.
+
+### Traps hit in the first half
+
+- **`$lb` unquoted is one argument in zsh.** Building `--load-balancers … --health-check-grace-period-seconds 120`
+  in a variable and expanding it bare handed the whole string to `--tags`. Six for six now;
+  the rule is unchanged, the runbook just keeps proving it.
+- **`ticket-saga-role` did not need updating.** Its policy already wildcards
+  `connection/ticket-services/*` and `secret:events!connection/*`, so a recreated connection
+  needs no IAM change — better than `runbook-checkout-saga.md` §4 feared.
+- **The EventBridge OAuth connection went `AUTHORIZING → AUTHORIZED` inside a minute**, on
+  the body-parameter format written above — predicted as a trap, not hit.
+- **Your public IP had changed** (`<my-ip>`, was `<my-ip>`). Added on 5432 to
+  `checkout-db-sg` (needed to create `ticketing`) and on 8080 to the four task SGs; the old
+  rule is left in place.
 
 ## What It Cost
 
@@ -597,52 +644,60 @@ and that is fine because it costs nothing — but destroying it would invalidate
 both client ids (one of which is inside the EventBridge connection) and the issuer baked
 into four task definitions. Leave it.
 
-## Traps Predicted
+## Traps Predicted — reconciled after the session
 
-Things this runbook expects to bite, written down before the session so they can be checked
-off rather than rediscovered. Move each to *Traps Hit* or *Predicted but not hit* afterwards.
+Written before the session so they could be checked off rather than rediscovered. Verdicts
+in bold; the ones that bit are expanded under *Traps Hit* in the Results section.
 
-- **`NimbusJwtDecoder.withIssuerLocation(…).build()` is eager.** It fetches the issuer's
+- **HIT (locally, before the session).** `NimbusJwtDecoder.withIssuerLocation(…).build()` is eager. It fetches the issuer's
   discovery document at construction. Found locally by a failing `contextLoads` — the
   starter wraps it in `SupplierJwtDecoder`, which is what Boot does. Consequence on AWS: the
   first request each task serves pays the JWKS fetch. Measure it (claim 12).
-- **The Cognito authorizer's token format.** The `ticket-users` authorizer is configured on
+- **NOT HIT.** The Cognito authorizer accepted the bare ID token on `/purchase` first time; `Bearer` was never needed there. The Cognito authorizer's token format. The `ticket-users` authorizer is configured on
   `method.request.header.Authorization`; whether it accepts `Bearer <token>` or wants the
   bare token is the kind of thing that costs twenty minutes. The verify block passes the
   bare ID token to `/purchase` and `Bearer` everywhere else. Record which worked.
-- **`$context.authorizer.claims.email` is only there for an ID token.** Send an access token
+- **NOT HIT, by construction** — every purchase sent the ID token. `$context.authorizer.claims.email` is only there for an ID token. Send an access token
   to `/purchase` and the claim resolves to an empty string, the template still renders, the
   saga runs, and the confirmation goes to the fallback address — silently. That is why
   step 6's claim table exists.
-- **EventBridge's OAuth body parameters vs. Cognito's token endpoint.** Cognito accepts the
+- **NOT HIT.** Connection `AUTHORIZED` within a minute on the format below. EventBridge's OAuth body parameters vs. Cognito's token endpoint. Cognito accepts the
   client id and secret in the body for `client_credentials`; the connection is configured
   that way above. If the saga's first `http:invoke` fails with a connection error, check
   the connection's status and `describe-connection`'s `StateReason` before touching IAM.
-- **`Missing Authentication Token` still means an unmatched path** — `runbook-alb-apigateway.md`
+- **NOT HIT this session.** `Missing Authentication Token` still means an unmatched path — `runbook-alb-apigateway.md`
   recorded this for `GET /` and it is more misleading now that authentication genuinely
   exists. A 403 with that message from API Gateway is a routing problem; a 401 from a
   service is an authentication one. Tell them apart by the `WWW-Authenticate` header, which
   only the service sends.
-- **`ExecutionAlreadyExists` surfaces as a 400 from the `AWS` integration** unless an
+- **NOT HIT** — the `4\d{2}` integration response mapped it to a clean 400 first time. `ExecutionAlreadyExists` surfaces as a 400 from the `AWS` integration unless an
   integration response maps it. The verify block expects 400; if it comes back as 500,
   add a selection pattern for it rather than changing the design.
-- **The ALB health check sees 401 now.** `200-499` accepts it. If a target group was ever
+- **NOT HIT.** Four targets healthy in ~2 min behind `200-499`. The ALB health check sees 401 now. `200-499` accepts it. If a target group was ever
   created with a narrower matcher, the service will register unhealthy for a reason that
   looks like an auth failure and is not one.
-- **zsh mangles `"$VAR:word"`.** Inside double quotes zsh still reads `:h`, `:t`, `:r`…
+- **HIT (while verifying step 1).** zsh mangles `"$VAR:word"`. Inside double quotes zsh still reads `:h`, `:t`, `:r`…
   after a bare parameter as a *modifier*, so `-u "$OPS_CLIENT_ID:wrong"` sent curl a
   client id with three characters eaten. Hit while verifying the token endpoint with a
   deliberately bad secret. Every `user:secret` in this runbook now braces both halves —
   `"${OPS_CLIENT_ID}:${OPS_CLIENT_SECRET}"` — which is the fifth zsh trap across the
   runbooks and the same rule as the other four: quote and brace anything a shell might
   read as syntax.
-- **Two tokens for the customer.** The ID token opens `/purchase`; the access token opens
+- **HELD, as designed.** Two tokens for the customer. The ID token opens `/purchase`; the access token opens
   everything else. A client sending the wrong one gets a 401 in both directions (claim 8 is
   the service refusing the ID token). This is Cognito's design — the ID token carries
   identity for the client, the access token carries authorization for APIs — and the
   runbook names it rather than hiding it behind a helper.
 
 ## Teardown
+
+**Done 2026-09-12 15:18.** Five ECS services (`--force`), then the ALB (its listener and
+rules with it; the four target groups stay), then RDS with `--skip-final-snapshot
+--delete-automated-backups`, then ElastiCache. The notifications DLQ was purged of order 1's
+undeliverable mail. The five superseded task-definition revisions were deregistered and
+their images deleted from ECR, which is back to ~0.8 GB. The `qr-generation` event source
+mapping is **left enabled** — that is its correct standing state, and a previous teardown
+had left it off. Standing cost after: ECR only.
 
 **Nothing new to tear down.** Every resource this slice adds is free and permanent: the
 pool, its domain, the resource server, two app clients, two users, the authorizer, the

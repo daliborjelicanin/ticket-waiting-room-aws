@@ -230,12 +230,23 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       one call produced 3 frames, each routed to its own socket** — the `SendMessageBatch` path
       against real SQS. No publish `WARN`, DLQ 0. ElastiCache + task torn down after
       (2026-09-06)
-- [ ] Cognito user pool + identity-bound queue — every service an OAuth2 resource server
+- [x] Cognito user pool + identity-bound queue — every service an OAuth2 resource server
       (`security-starter`), ops scope for the saga and operators, one live queue place per
       `sub` enforced atomically in `join.lua`. Guest checkout dropped: a per-account ticket
-      limit is unenforceable without an account. Code done and proven locally
-      (**200 concurrent joins from one identity → 1 place**; customer token on any ops
-      endpoint → 403 at the filter); AWS half in `runbook-cognito-auth.md`
+      limit is unenforceable without an account — see `runbook-cognito-auth.md`.
+      **On AWS: four purchases through the new `POST /events/{id}/purchase` (API Gateway →
+      Step Functions, no Lambda) all `SUCCEEDED`, with `customerRef` taken from the ID
+      token's verified `sub` and the body's forged value ignored; a retry → 400
+      `ExecutionAlreadyExists`; 50 concurrent joins as one identity → 1 token; a customer's
+      token on seed / admit / create-order → 403 at the filter with zero lines in the
+      service log; another customer's order and QR → 404 identical to an unknown id; an ID
+      token at a service → 401 on `token_use`; the saga authenticated with an M2M token via
+      an EventBridge OAuth connection.** First token per task **12.8 s** on 0.25 vCPU vs
+      629 ms locally, steady state 0.1 s through the whole edge — a warm-up on
+      `ApplicationReadyEvent` is the recorded follow-up. Two pre-existing defects found:
+      `qr-generation`'s event source mapping left disabled by a teardown, and the issuance
+      task role lacking `s3:ListBucket` (HeadObject on a missing key is 403 → the QR
+      endpoint 500'd). Both fixed. Stack up 14:28–15:18, ≈ $0.15 (2026-09-12)
 - [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
 - **Learn:** APIGW ↔ ALB integration, WebSocket APIs, Cognito, WAF rules

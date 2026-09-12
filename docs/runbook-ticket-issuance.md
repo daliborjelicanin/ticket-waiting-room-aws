@@ -112,6 +112,13 @@ Flyway creates the schema on first start. The service reuses the RDS-managed mas
 through the **execution** role, exactly as checkout does, so it needs no database credentials
 in its task role.
 
+> **Added 2026-09-12, found by `runbook-cognito-auth.md`:** the task role needs
+> `s3:ListBucket` on the bucket (condition `s3:prefix = tickets/*`) as well as `GetObject`
+> — without it S3 answers `HeadObject` on a missing key with **403**, not 404, and
+> `TicketQrStore.exists()` cannot see `NoSuchKey`, so `GET /tickets/{id}/qr` is a 500
+> until the object exists. Also confirm the `qr-generation` event source mapping is
+> **Enabled** at bring-up; it was found `Disabled` after an earlier teardown.
+
 ### 5. IAM task role
 
 `ticket-issuance-task-role`, inline policy `TicketIssuance`:
