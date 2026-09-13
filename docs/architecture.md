@@ -23,9 +23,9 @@ Per-module diagrams, with the internals each service is actually responsible for
 
 ## 1. System topology
 
-Solid boxes exist and have run on AWS. Dashed boxes are built in code and runbook but have
-not yet run there (Cognito, the purchase entry point — `runbook-cognito-auth.md`), or
-belong to a later slice (WAF).
+Every box below exists and has run on AWS. Cognito and the purchase entry point are in
+`runbook-cognito-auth.md`; the WAF web ACL on the REST stage — a per-IP rate limit and
+Bot Control, both scoped to `POST /events/{id}/purchase` — in `runbook-waf.md`.
 
 ```mermaid
 flowchart LR
@@ -33,7 +33,7 @@ flowchart LR
     COG["Cognito user pool<br/>ticket-users · scope ticketing/ops"]
 
     subgraph edge["Edge — slice 6"]
-        WAF["WAF<br/>rate limit + bot control"]
+        WAF["WAF<br/>rate limit 100/min per IP + Bot Control<br/>scoped to POST /events/{id}/purchase"]
         APIGW["API Gateway REST<br/>/{proxy+} → ALB, no authorizer<br/>POST /events/{id}/purchase → saga"]
         WSAPI["API Gateway WebSocket"]
         ALB["ALB<br/>X-Edge-Secret: WAF cannot be bypassed"]
@@ -108,8 +108,6 @@ flowchart LR
     WSN -->|"which sockets hold this token"| CONN
     WSN -->|"postToConnection"| WSAPI
 
-    classDef planned stroke-dasharray:5 4;
-    class WAF,COG planned;
 ```
 
 **Why each store is where it is** — the split is the argument the project exists to make:
@@ -413,7 +411,7 @@ flowchart LR
     S2 --> S3["3 · waiting room<br/>ElastiCache Redis"]
     S3 --> S4["4 · checkout saga<br/>Step Functions + RDS + SQS"]
     S4 --> S5["5 · issuance + notification<br/>SQS, S3, SNS, SES"]
-    S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket done<br/>Cognito: code proven, AWS pending · WAF pending"]
+    S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket done<br/>Cognito + WAF done · optional frontend open"]
     S6 --> S7["7 · observability<br/>+ load test"]
     S7 --> S8["8 · wrap-up"]
 

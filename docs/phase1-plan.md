@@ -247,7 +247,16 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       `qr-generation`'s event source mapping left disabled by a teardown, and the issuance
       task role lacking `s3:ListBucket` (HeadObject on a missing key is 403 → the QR
       endpoint 500'd). Both fixed. Stack up 14:28–15:18, ≈ $0.15 (2026-09-12)
-- [ ] WAF on the purchase endpoint: rate limit + bot control (anti-scalping)
+- [x] WAF on the purchase endpoint: rate limit + bot control (anti-scalping) — see
+      `runbook-waf.md`. Web ACL on the `ticket-edge` `dev` stage, both rules scoped to
+      `POST /events/{id}/purchase` so the saga's own `http:invoke` re-entry on `/{proxy+}`
+      is never inspected; WAF sits *before* the Cognito authorizer, so the whole proof ran
+      with **nothing else up**. **A flood of unauthenticated posts flipped 401 → 429 with
+      WAF's own body (~30 s to engage, released ~50 s after the last burst); `curl` on the
+      purchase path → 403 as `CategoryHttpLibrary` while the same request with a browser UA
+      → 401 from the authorizer; other paths untouched.** One trap: AWS CLI v2 base64-decodes
+      `SearchString`, so the first build matched nothing and read back as if it did.
+      Session-only — ~$17/mo if forgotten (2026-09-13)
 - [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
 - **Learn:** APIGW ↔ ALB integration, WebSocket APIs, Cognito, WAF rules
 
