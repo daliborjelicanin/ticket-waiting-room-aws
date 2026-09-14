@@ -276,12 +276,14 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       The concurrency ITs now also assert the metrics' view of each race: 50 charges →
       `captured` 1 + `in_flight`/`not_payable` 49; 20 deliveries → `issued` 1,
       `duplicate` 19. 147 tests green (2026-09-13)
-- [ ] AWS: ADOT collector sidecar in every task definition (the image ships an ECS default
-      config with an OTLP receiver and `awsxray` + `awsemf` exporters — confirm its metric
-      namespace and dimension handling before building the dashboard against it, or ship
-      our own config through SSM), `TELEMETRY_EXPORT_ENABLED=true`, task roles gain
-      `xray:PutTraceSegments`/`PutTelemetryRecords` + `cloudwatch:PutMetricData` + the
-      collector's log group; X-Ray tracing on the `ticket-edge` stage and the saga; target
+- [ ] AWS: ADOT collector sidecar in every task definition — see `runbook-observability.md`.
+      Own config through SSM (`docs/otel-collector-config.yaml`: the image's default was
+      checked and routes right, but with roll-ups on and a generic namespace),
+      `TELEMETRY_EXPORT_ENABLED=true`, one `ticket-telemetry-export` policy on five task
+      roles (`xray:Put*` + `logs:*` on the EMF group — metrics go as EMF log events, not
+      `PutMetricData`), a first task role for checkout, `ssm:GetParameters` on the execution
+      role, task memory 1 GB. Images at `4262e76` are in ECR (2026-09-14) but predate the
+      `service` metric tag — rebuild once more; X-Ray tracing on the `ticket-edge` stage and the saga; target
       groups re-pointed at `GET /actuator/health` with a `200` matcher; read the warm-up's
       "fetched in N ms" line and the first token's latency against slice 6's 12.8 s
 - [ ] CloudWatch dashboard: queue depth, seats remaining, hold contention, conversion

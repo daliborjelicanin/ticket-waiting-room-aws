@@ -61,6 +61,12 @@ management:
         url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
         step: PT1M
   metrics:
+    tags:
+      # Every data point carries the service name as an attribute, which the collector's
+      # EMF exporter turns into a CloudWatch dimension. Without it five services' copies of
+      # http.server.requests land in one namespace as one indistinguishable metric —
+      # OTLP's resource attributes (where service.name otherwise lives) are not dimensions.
+      service: ${spring.application.name}
     enable:
       # Every exported series is a billable CloudWatch metric. Boot's JVM, Tomcat, logging
       # and process meters are dozens of them and answer none of the dashboard's questions;

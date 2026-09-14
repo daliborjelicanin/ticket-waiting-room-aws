@@ -39,7 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "management.otlp.metrics.export.enabled=true",
                 "management.otlp.metrics.export.step=1s",
                 "management.metrics.enable.all=false",
-                "management.metrics.enable.probe=true"
+                "management.metrics.enable.probe=true",
+                "management.metrics.tags.service=probe-service"
         })
 @Testcontainers
 class OtlpExportIT {
@@ -84,6 +85,8 @@ class OtlpExportIT {
         String logs = collectorLogsUntil("Name: probe.hits");
 
         assertThat(logs).contains("-> outcome: Str(ok)");
+        // The common tag every service sets, so the EMF exporter has a per-service dimension.
+        assertThat(logs).contains("-> service: Str(probe-service)");
         // Boot's defaults were switched off: none of the JVM series reach the collector.
         assertThat(logs).doesNotContain("Name: jvm.memory.used");
     }

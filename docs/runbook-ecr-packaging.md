@@ -110,6 +110,15 @@ docker push "${REPO}:latest"
 > as its lowercase *modifier* and the push targets `seat-inventory-serviceatest`, which
 > fails with a confusing `name unknown: The repository ... does not exist`. `:$SHA` is
 > unaffected, so the bug only shows on the `latest` push.
+>
+> The same modifier bites `docker build -t $s:local` in a loop over service names — and
+> there it does **not** fail. The build succeeds under the name `<service>ocal`, a later
+> `docker run $s:local` smoke test expands the same way and happily inspects that fresh
+> image, while `"${s}:local"` in the tag-and-push step still names the previous build. The
+> result is the old image pushed under the new SHA, with every check in between passing.
+> Hit on 2026-09-14 rebuilding all five services for slice 7; caught only because
+> `describe-images` showed four of the five new tags sharing the old push timestamp.
+> Brace every expansion, and after pushing compare `imagePushedAt`, not just the tag list.
 
 **4. Verify:**
 
