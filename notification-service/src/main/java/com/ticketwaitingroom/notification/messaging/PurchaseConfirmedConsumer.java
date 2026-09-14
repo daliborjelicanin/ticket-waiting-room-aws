@@ -3,6 +3,7 @@ package com.ticketwaitingroom.notification.messaging;
 import tools.jackson.databind.json.JsonMapper;
 import com.ticketwaitingroom.common.events.PurchaseConfirmedEvent;
 import com.ticketwaitingroom.common.messaging.SqsMessagePump;
+import com.ticketwaitingroom.observability.SqsMessageTracing;
 import com.ticketwaitingroom.notification.config.NotificationProperties;
 import com.ticketwaitingroom.notification.notify.PurchaseConfirmationMailer;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,7 @@ public class PurchaseConfirmedConsumer implements SmartLifecycle {
     private final SqsClient sqs;
     private final NotificationProperties properties;
     private final PurchaseConfirmationMailer mailer;
+    private final SqsMessageTracing tracing;
     // The autoconfigured mapper, injected as the concrete JsonMapper: Jackson 3 makes
     // ObjectMapper a supertype that XmlMapper also extends, so naming the JSON one is not
     // pedantry, it is what keeps this unambiguous if an XML dataformat ever lands.
@@ -61,11 +63,15 @@ public class PurchaseConfirmedConsumer implements SmartLifecycle {
             return;
         }
         var consumer = properties.consumer();
+        // Each delivery runs inside a span parented on the message's trace header. SNS
+        // forwards the header the saga's publish carried, so the mail is the same X-Ray
+        // trace as the purchase — provided raw message delivery is on, which it must be
+        // for the body to parse at all.
         pump = new SqsMessagePump(
                 sqs,
                 new SqsMessagePump.Settings(properties.queueUrl(), "purchase-confirmed",
                         consumer.threads(), consumer.batchSize(), consumer.pollWait()),
-                this::handle);
+                tracing.traced(SqsMessageTracing.queueName(properties.queueUrl()), this::handle));
         pump.start();
     }
 

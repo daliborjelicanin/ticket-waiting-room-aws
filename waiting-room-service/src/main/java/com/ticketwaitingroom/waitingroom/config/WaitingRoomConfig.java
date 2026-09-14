@@ -12,7 +12,9 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.util.StringUtils;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -33,6 +35,7 @@ import java.util.List;
  */
 @Configuration
 @EnableConfigurationProperties(WaitingRoomProperties.class)
+@EnableScheduling // For the queue-depth gauge refresh in WaitingRoomMetrics, and nothing else.
 public class WaitingRoomConfig {
 
     @Bean
@@ -45,12 +48,18 @@ public class WaitingRoomConfig {
                 properties.keyTtl().toSeconds());
     }
 
+    /**
+     * @param tracing observability-starter's SDK hook: a span per publish, and the trace
+     *                written into each message so the notifier Lambda's work is the same
+     *                trace as the admit call that caused it
+     */
     @Bean
     public SqsClient sqsClient(
             @Value("${aws.region}") String region,
-            @Value("${aws.sqs.endpoint:}") String endpoint) {
+            @Value("${aws.sqs.endpoint:}") String endpoint,
+            ClientOverrideConfiguration tracing) {
 
-        var builder = SqsClient.builder().region(Region.of(region));
+        var builder = SqsClient.builder().region(Region.of(region)).overrideConfiguration(tracing);
         if (StringUtils.hasText(endpoint)) {
             builder.endpointOverride(URI.create(endpoint))
                     .credentialsProvider(StaticCredentialsProvider.create(

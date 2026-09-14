@@ -74,6 +74,11 @@ flowchart LR
     N["Concurrency is raised by adding consumers,<br/>not by making any of this asynchronous —<br/>which is exactly what virtual threads are for."] -.- L
 ```
 
+The receive also asks for the `AWSTraceHeader` system attribute. The pump never reads it;
+`observability-starter`'s `SqsMessageTracing` does, to open the consumer's span under the
+producer's trace. It has to be requested here because SQS delivers only the attributes a
+receive names — without it every consumer would start a trace of its own.
+
 ## The `compileOnly` SQS dependency
 
 ```mermaid

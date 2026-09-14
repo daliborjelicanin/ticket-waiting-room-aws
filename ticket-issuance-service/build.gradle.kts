@@ -11,6 +11,9 @@ dependencies {
     // Makes this service an OAuth2 resource server for the Cognito pool -- decoder, validators
     // and the stateless filter chain -- leaving only this service's own path rules to write.
     implementation(project(":security-starter"))
+    // Health endpoint, OTLP traces and metrics, X-Ray trace ids and header, SDK call spans,
+    // and the consumer-side span that continues the saga's trace across the queue.
+    implementation(project(":observability-starter"))
     implementation(platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.springBoot.get()}"))
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.data.jpa)

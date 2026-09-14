@@ -3,6 +3,7 @@ package com.ticketwaitingroom.ticketissuance.messaging;
 import tools.jackson.databind.json.JsonMapper;
 import com.ticketwaitingroom.common.events.TicketIssuanceMessage;
 import com.ticketwaitingroom.common.messaging.SqsMessagePump;
+import com.ticketwaitingroom.observability.SqsMessageTracing;
 import com.ticketwaitingroom.ticketissuance.config.TicketIssuanceProperties;
 import com.ticketwaitingroom.ticketissuance.ticket.IssueOutcome;
 import com.ticketwaitingroom.ticketissuance.ticket.TicketIssuanceService;
@@ -32,6 +33,7 @@ public class TicketIssuanceConsumer implements SmartLifecycle {
     private final SqsClient sqs;
     private final TicketIssuanceProperties properties;
     private final TicketIssuanceService issuanceService;
+    private final SqsMessageTracing tracing;
     // The autoconfigured mapper, injected as the concrete JsonMapper: Jackson 3 makes
     // ObjectMapper a supertype that XmlMapper also extends, so naming the JSON one is not
     // pedantry, it is what keeps this unambiguous if an XML data format ever lands.
@@ -50,11 +52,13 @@ public class TicketIssuanceConsumer implements SmartLifecycle {
             return;
         }
         var consumer = properties.consumer();
+        // Each delivery runs inside a span parented on the trace the saga's SendMessage
+        // wrote into the message, so X-Ray shows enqueue and insert as one trace.
         pump = new SqsMessagePump(
                 sqs,
                 new SqsMessagePump.Settings(properties.issuanceQueueUrl(), "ticket-issuance",
                         consumer.threads(), consumer.batchSize(), consumer.pollWait()),
-                this::handle);
+                tracing.traced(SqsMessageTracing.queueName(properties.issuanceQueueUrl()), this::handle));
         pump.start();
     }
 

@@ -2,6 +2,7 @@ package com.ticketwaitingroom.notification.notify;
 
 import com.ticketwaitingroom.common.events.PurchaseConfirmedEvent;
 import com.ticketwaitingroom.notification.config.NotificationProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -64,6 +65,7 @@ class PurchaseConfirmationMailerTest {
     private PurchaseConfirmationMailer mailer(String from, String fallback) {
         return new PurchaseConfirmationMailer(sender, new NotificationProperties(
                 "https://sqs.test/queue", "logging", from, fallback, "https://tickets.example.test/",
-                new NotificationProperties.ConsumerProperties(false, 1, 10, Duration.ofSeconds(1))));
+                new NotificationProperties.ConsumerProperties(false, 1, 10, Duration.ofSeconds(1))),
+                new NotificationMetrics(new SimpleMeterRegistry()));
     }
 }

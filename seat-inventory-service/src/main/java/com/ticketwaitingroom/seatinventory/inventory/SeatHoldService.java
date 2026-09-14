@@ -15,6 +15,9 @@ import java.util.UUID;
  * hold identity/expiry and supplies the current time; every atomic transition is
  * delegated to the {@link SeatRepository} conditional writes. The concurrency guarantee
  * lives entirely there — this layer adds no locking of its own.
+ *
+ * <p>It is also where each transition's outcome is counted ({@link SeatInventoryMetrics}):
+ * the repository knows it lost a conditional write, this layer knows what that meant.
  */
 @Service
 @RequiredArgsConstructor
@@ -22,6 +25,7 @@ public class SeatHoldService {
 
     private final SeatRepository seatRepository;
     private final SeatInventoryProperties properties;
+    private final SeatInventoryMetrics metrics;
     private final Clock clock;
 
     /**
@@ -33,7 +37,13 @@ public class SeatHoldService {
     public SeatHold holdSeat(String eventId, String seatId) {
         String holdId = UUID.randomUUID().toString();
         Instant expiresAt = clock.instant().plus(properties.holdDuration());
-        seatRepository.holdSeat(eventId, seatId, holdId, expiresAt);
+        try {
+            seatRepository.holdSeat(eventId, seatId, holdId, expiresAt);
+        } catch (SeatUnavailableException lost) {
+            metrics.holdAttempted(eventId, false);
+            throw lost;
+        }
+        metrics.holdAttempted(eventId, true);
         return new SeatHold(eventId, seatId, holdId, expiresAt);
     }
 
@@ -43,7 +53,13 @@ public class SeatHoldService {
      * @throws HoldNotFoundException if the seat is not currently held under this holdId
      */
     public void releaseHold(String eventId, String seatId, String holdId) {
-        seatRepository.releaseHold(eventId, seatId, holdId);
+        try {
+            seatRepository.releaseHold(eventId, seatId, holdId);
+        } catch (HoldNotFoundException stale) {
+            metrics.holdReleased(eventId, false);
+            throw stale;
+        }
+        metrics.holdReleased(eventId, true);
     }
 
     /**
@@ -53,6 +69,12 @@ public class SeatHoldService {
      *                               or the hold has expired
      */
     public void confirmPurchase(String eventId, String seatId, String holdId) {
-        seatRepository.confirmPurchase(eventId, seatId, holdId, clock.instant());
+        try {
+            seatRepository.confirmPurchase(eventId, seatId, holdId, clock.instant());
+        } catch (HoldNotFoundException stale) {
+            metrics.purchaseConfirmed(eventId, false);
+            throw stale;
+        }
+        metrics.purchaseConfirmed(eventId, true);
     }
 }

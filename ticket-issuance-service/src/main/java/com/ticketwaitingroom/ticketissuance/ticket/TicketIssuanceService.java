@@ -37,6 +37,7 @@ public class TicketIssuanceService {
     private final TicketWriter ticketWriter;
     private final TicketRepository ticketRepository;
     private final QrGenerationDispatcher qrDispatcher;
+    private final TicketIssuanceMetrics metrics;
     private final Clock clock;
 
     /**
@@ -56,6 +57,7 @@ public class TicketIssuanceService {
                     ticketWriter.findIssued(orderId, message.seatId(), duplicate));
         }
 
+        metrics.issued(outcome);
         qrDispatcher.requestQr(outcome.ticket());
         return outcome;
     }

@@ -212,6 +212,27 @@ class SeatHoldConcurrencyIT {
         assertThat(seat.holdId()).isEqualTo("hold-2");
     }
 
+    @Test
+    void remainingCountFollowsTheSeatLifecycle() {
+        repository.createAvailableSeat(EVENT_ID, "A-13");
+        repository.createAvailableSeat(EVENT_ID, "A-14");
+        repository.createAvailableSeat("evt-other", "Z-1");
+        Instant expiresAt = Instant.now().plus(Duration.ofMinutes(5));
+
+        assertThat(repository.countAvailable(EVENT_ID)).isEqualTo(3);
+
+        repository.holdSeat(EVENT_ID, SEAT_ID, "hold-1", expiresAt);
+        repository.holdSeat(EVENT_ID, "A-13", "hold-2", expiresAt);
+        repository.confirmPurchase(EVENT_ID, "A-13", "hold-2", Instant.now());
+        assertThat(repository.countAvailable(EVENT_ID)).isEqualTo(1);
+
+        repository.releaseHold(EVENT_ID, SEAT_ID, "hold-1");
+        assertThat(repository.countAvailable(EVENT_ID)).isEqualTo(2);
+        // Another event's seats never count towards this one's: the query is keyed, not scanned.
+        assertThat(repository.countAvailable("evt-other")).isEqualTo(1);
+        assertThat(repository.countAvailable("evt-unknown")).isZero();
+    }
+
     /**
      * Runs {@code attempts} virtual threads through {@code attempt}, released by a start
      * gate at once for maximum contention on the seat item.

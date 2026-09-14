@@ -1,6 +1,7 @@
 package com.ticketwaitingroom.waitingroom.queue;
 
 import com.ticketwaitingroom.waitingroom.config.WaitingRoomProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -41,6 +42,7 @@ class AdmissionAnnouncementTest {
         publisher = mock(AdmissionPublisher.class);
         service = new WaitingRoomService(queue, publisher,
                 new WaitingRoomProperties(Duration.ofMinutes(10), 500, Duration.ofHours(24), null),
+                new WaitingRoomMetrics(new SimpleMeterRegistry(), queue),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

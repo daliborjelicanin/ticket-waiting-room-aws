@@ -28,6 +28,7 @@ public class WaitingRoomService {
     private final WaitingRoomQueue queue;
     private final AdmissionPublisher admissionPublisher;
     private final WaitingRoomProperties properties;
+    private final WaitingRoomMetrics metrics;
     private final Clock clock;
 
     /**
@@ -42,7 +43,9 @@ public class WaitingRoomService {
      *                    security filter has already refused anonymous requests
      */
     public QueuePlace join(String eventId, String customerRef) {
-        return queue.join(eventId, customerRef, UUID.randomUUID().toString(), clock.instant());
+        QueuePlace place = queue.join(eventId, customerRef, UUID.randomUUID().toString(), clock.instant());
+        metrics.joined(place);
+        return place;
     }
 
     /**
@@ -77,6 +80,7 @@ public class WaitingRoomService {
         // expiry echoed back here and the one a later position lookup reports would differ.
         Instant admissionExpiresAt = now.plus(properties.admissionDuration()).truncatedTo(ChronoUnit.SECONDS);
         List<String> tokens = queue.admitNext(eventId, count, admissionExpiresAt, now);
+        metrics.admitted(eventId, tokens.size());
 
         announce(eventId, tokens, admissionExpiresAt);
         return new Admission(tokens, admissionExpiresAt);
@@ -99,6 +103,7 @@ public class WaitingRoomService {
         try {
             admissionPublisher.publish(eventId, tokens, admissionExpiresAt);
         } catch (RuntimeException notPublished) {
+            metrics.admissionNotPublished();
             log.warn("Admitted {} tokens for event {} but could not publish the admission; "
                     + "those clients will only learn of it by polling", tokens.size(), eventId, notPublished);
         }

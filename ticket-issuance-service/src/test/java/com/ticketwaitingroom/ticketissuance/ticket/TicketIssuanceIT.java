@@ -3,6 +3,7 @@ package com.ticketwaitingroom.ticketissuance.ticket;
 import com.ticketwaitingroom.common.events.TicketIssuanceMessage;
 import com.ticketwaitingroom.common.tickets.TicketQrObjects;
 import com.ticketwaitingroom.ticketissuance.qr.TicketQrStore;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -108,10 +109,15 @@ class TicketIssuanceIT {
     @Autowired
     private JsonMapper json;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @Test
     void concurrentDeliveriesIssueExactlyOneTicket() throws InterruptedException {
         TicketIssuanceMessage message = purchase();
         int deliveries = 20;
+        double issuedBefore = issuedCount("issued");
+        double duplicatesBefore = issuedCount("duplicate");
         AtomicInteger issued = new AtomicInteger();
         AtomicInteger duplicates = new AtomicInteger();
         var ticketIds = new ConcurrentLinkedQueue<UUID>();
@@ -134,6 +140,13 @@ class TicketIssuanceIT {
                 .as("every delivery, winner and losers alike, resolves to the same ticket")
                 .hasSize(1);
         assertThat(ticketRepository.findByOrderIdOrderBySeatId(orderIdOf(message))).hasSize(1);
+        // And the dashboard's reading of the same race.
+        assertThat(issuedCount("issued") - issuedBefore).isEqualTo(1);
+        assertThat(issuedCount("duplicate") - duplicatesBefore).isEqualTo(deliveries - 1);
+    }
+
+    private double issuedCount(String outcome) {
+        return meterRegistry.counter("tickets.issued", "outcome", outcome).count();
     }
 
     @Test

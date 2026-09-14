@@ -21,6 +21,7 @@ flowchart TB
         SSS["SeatSeedService"]
         SR["SeatRepository<br/><b>every conditional write lives here</b>"]
         EH["ApiExceptionHandler<br/>SeatUnavailable → 409 · HoldNotFound → 404"]
+        MET["SeatInventoryMetrics<br/>outcome counters · seats.remaining gauge"]
     end
 
     D[("DynamoDB<br/>seat-inventory")]
@@ -31,6 +32,8 @@ flowchart TB
     SHC --> SHS --> SR --> D
     SSC --> SSS --> SR
     SHC -.-> EH
+    SHS -.->|"held / unavailable<br/>released / confirmed / not_found"| MET
+    MET -->|"COUNT query per known event, every 30s"| SR
     HC --> D
 
     SCH["common · SeatTableSchema<br/>attribute names shared by both writers"] -.- SR
@@ -40,6 +43,18 @@ flowchart TB
 `SeatTableSchema` lives in `common` precisely because there are two writers. A divergent
 attribute name is not a compile error and not a runtime error — DynamoDB accepts any
 attribute name. It is a condition that silently never matches.
+
+## What the dashboard reads
+
+`SeatHoldService` counts each transition by its outcome — the repository knows it lost a
+conditional write, the service knows what that meant — into `seat.hold.attempts`,
+`seat.hold.releases` and `seat.purchase.confirmations`, each tagged `outcome`. Under the
+load test `held` : `unavailable` on one seat is the headline ratio. `seats.remaining{event}`
+is a gauge refreshed on a schedule from `SeatRepository.countAvailable` — a `Select.COUNT`
+query with a server-side status filter, paged because DynamoDB pages on bytes read rather
+than rows matched — for the events this task has seen since it started; it is never on the
+request path, where a query per hold would cost more than the hold. How the numbers leave
+the task is `observability-starter`'s business.
 
 ## The item
 

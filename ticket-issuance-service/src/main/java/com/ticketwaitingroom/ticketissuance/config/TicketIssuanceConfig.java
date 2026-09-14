@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -20,6 +21,10 @@ import java.time.Clock;
  * code runs against LocalStack locally (endpoint set + dummy credentials) and against real
  * AWS in the cloud (endpoint unset → default endpoints and the default credentials provider
  * chain, i.e. the ECS task role). Same shape as {@code SeatInventoryConfig}.
+ *
+ * <p>The SQS and S3 clients take observability-starter's {@code tracing} override: a span
+ * per call, and on the QR request the trace written into the message. The presigner does
+ * not — it signs URLs locally and never makes a call worth a span.
  */
 @Configuration
 @EnableConfigurationProperties(TicketIssuanceProperties.class)
@@ -28,9 +33,10 @@ public class TicketIssuanceConfig {
     @Bean
     public SqsClient sqsClient(
             @Value("${aws.region}") String region,
-            @Value("${aws.sqs.endpoint:}") String endpoint) {
+            @Value("${aws.sqs.endpoint:}") String endpoint,
+            ClientOverrideConfiguration tracing) {
 
-        var builder = SqsClient.builder().region(Region.of(region));
+        var builder = SqsClient.builder().region(Region.of(region)).overrideConfiguration(tracing);
         if (StringUtils.hasText(endpoint)) {
             builder.endpointOverride(URI.create(endpoint)).credentialsProvider(localCredentials());
         }
@@ -40,9 +46,10 @@ public class TicketIssuanceConfig {
     @Bean
     public S3Client s3Client(
             @Value("${aws.region}") String region,
-            @Value("${aws.s3.endpoint:}") String endpoint) {
+            @Value("${aws.s3.endpoint:}") String endpoint,
+            ClientOverrideConfiguration tracing) {
 
-        var builder = S3Client.builder().region(Region.of(region));
+        var builder = S3Client.builder().region(Region.of(region)).overrideConfiguration(tracing);
         if (StringUtils.hasText(endpoint)) {
             // Virtual-host addressing resolves <bucket>.localhost, which does not exist.
             builder.endpointOverride(URI.create(endpoint))

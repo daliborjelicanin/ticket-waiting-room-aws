@@ -15,8 +15,10 @@ import java.util.List;
 public class SeatSeedService {
 
     private final SeatRepository seatRepository;
+    private final SeatInventoryMetrics metrics;
 
     public SeedResult seedSeats(String eventId, List<String> seatIds) {
+        metrics.seatsSeeded(eventId);
         int created = 0;
         int skipped = 0;
         for (String seatId : seatIds) {

@@ -135,6 +135,20 @@ sequenceDiagram
 PENDING payment row — a charge that may have moved money, with a row to prove it — rather
 than a charge nobody has any record of.
 
+## What the dashboard reads
+
+`CheckoutMetrics`, from `CheckoutService` where the outcome is decided:
+`checkout.charges{outcome}` with `captured`, `declined`, `failed`, `replayed` (a settled key
+answered again, or a conflict resolved to the original attempt), `in_flight` (the partial
+unique index refusing a rival while the winner's row is PENDING) and `not_payable` (an
+attempt that arrived after the winner had settled the order). Under the concurrency test
+the last two together are N−1 of every N — which is which depends on how late each loser
+was. `checkout.orders{created|replayed}` shows saga retries; `checkout.gateway.latency`
+times the gateway call alone, the network the transaction is deliberately not held across,
+which is the number that climbs in a provider outage while the pool stays healthy.
+`captured` over the waiting room's `admissions` is the conversion rate, computed on the
+dashboard.
+
 ## Concurrent charges on one order
 
 ```mermaid

@@ -1,0 +1,19 @@
+# The collector OtlpExportIT stands up: receive OTLP over HTTP, print everything.
+# The ADOT collector in ECS uses the same receiver and swaps the exporter for X-Ray and
+# CloudWatch EMF; what this proves is that the OTLP side of that conversation is right.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]

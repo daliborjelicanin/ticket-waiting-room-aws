@@ -261,6 +261,29 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - **Learn:** APIGW ↔ ALB integration, WebSocket APIs, Cognito, WAF rules
 
 ### 7. Observability + the proof — $0–few $ per load-test session
+- [x] Code: instrument first, no AWS session — `observability-starter` (the fourth starter-
+      shaped module: health endpoint, OTLP traces + metrics, X-Ray-shaped trace ids, the
+      X-Ray header beside W3C, a span per AWS SDK call, consumer spans continued across SQS
+      from `AWSTraceHeader`), one `XxxMetrics` per service with only the meters the dashboard
+      will ask for (Boot's JVM/Tomcat series off — every series is a billable metric), and
+      the JWT warm-up on `ApplicationReadyEvent` recorded as slice 6's follow-up. **OTLP
+      into a collector sidecar rather than CloudWatch/X-Ray SDKs**: Boot 4 dropped the
+      CloudWatch registry auto-config, and one vendor-neutral pipeline is what EKS will
+      want anyway. **Proven against a real OTel collector in Docker: a request wearing API
+      Gateway's `X-Amzn-Trace-Id` is exported as that trace with that parent under this
+      service's name over the JDK HTTP sender (OkHttp + Kotlin excluded: 134 → 130 jars);
+      the one enabled metric arrives with its tag and an exemplar, no JVM series does.**
+      The concurrency ITs now also assert the metrics' view of each race: 50 charges →
+      `captured` 1 + `in_flight`/`not_payable` 49; 20 deliveries → `issued` 1,
+      `duplicate` 19. 147 tests green (2026-09-13)
+- [ ] AWS: ADOT collector sidecar in every task definition (the image ships an ECS default
+      config with an OTLP receiver and `awsxray` + `awsemf` exporters — confirm its metric
+      namespace and dimension handling before building the dashboard against it, or ship
+      our own config through SSM), `TELEMETRY_EXPORT_ENABLED=true`, task roles gain
+      `xray:PutTraceSegments`/`PutTelemetryRecords` + `cloudwatch:PutMetricData` + the
+      collector's log group; X-Ray tracing on the `ticket-edge` stage and the saga; target
+      groups re-pointed at `GET /actuator/health` with a `200` matcher; read the warm-up's
+      "fetched in N ms" line and the first token's latency against slice 6's 12.8 s
 - [ ] CloudWatch dashboard: queue depth, seats remaining, hold contention, conversion
 - [ ] X-Ray tracing across APIGW → ECS → Step Functions → Lambda
 - [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;

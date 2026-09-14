@@ -37,6 +37,17 @@ class TicketingSecurityAutoConfigurationTest {
     }
 
     @Test
+    void warmsTheDecoderUnlessToldNotTo() {
+        // The build switches the warm-up off for every test JVM (see the root build script),
+        // so "on" has to be said explicitly here; the default is proven by the property's
+        // matchIfMissing, which this context otherwise never sees.
+        runner.withPropertyValues(ISSUER_PROPERTY + "=https://cognito.test.invalid/", "ticketing.security.warm-up=true")
+                .run(context -> assertThat(context).hasSingleBean(JwtDecoderWarmUp.class));
+        runner.withPropertyValues(ISSUER_PROPERTY + "=https://cognito.test.invalid/", "ticketing.security.warm-up=false")
+                .run(context -> assertThat(context).doesNotHaveBean(JwtDecoderWarmUp.class));
+    }
+
+    @Test
     void refusesToStartWithoutAnIssuer() {
         runner.run(context -> {
             assertThat(context).hasFailed();

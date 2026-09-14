@@ -12,6 +12,7 @@ import com.ticketwaitingroom.checkoutpayment.payment.PaymentStatus;
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
 import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,6 +71,8 @@ class CheckoutConcurrencyIT {
     private PaymentRepository paymentRepository;
     @Autowired
     private PaymentGateway paymentGateway;
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     private MockPaymentGateway gateway;
 
@@ -83,6 +86,9 @@ class CheckoutConcurrencyIT {
         Order order = anOrder();
         int attempts = 50;
         int before = gateway.distinctCharges();
+        double capturedBefore = charges("captured");
+        double refusedBefore = charges("in_flight") + charges("not_payable");
+        long gatewayCallsBefore = meterRegistry.timer("checkout.gateway.latency").count();
         AtomicInteger captured = new AtomicInteger();
         AtomicInteger rejected = new AtomicInteger();
 
@@ -110,6 +116,17 @@ class CheckoutConcurrencyIT {
         assertThat(payments).hasSize(1);
         assertThat(payments.getFirst().getStatus()).isEqualTo(PaymentStatus.CAPTURED);
         assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus()).isEqualTo(OrderStatus.PAID);
+
+        // The dashboard's view of the same race: one capture, N-1 refusals, one gateway timing.
+        // A loser is in_flight if it raced the winner's insert and not_payable if it arrived
+        // after the winner had already settled the order; which is which depends on timing.
+        assertThat(charges("captured") - capturedBefore).isEqualTo(1);
+        assertThat(charges("in_flight") + charges("not_payable") - refusedBefore).isEqualTo(attempts - 1);
+        assertThat(meterRegistry.timer("checkout.gateway.latency").count() - gatewayCallsBefore).isEqualTo(1);
+    }
+
+    private double charges(String outcome) {
+        return meterRegistry.counter("checkout.charges", "outcome", outcome).count();
     }
 
     @Test

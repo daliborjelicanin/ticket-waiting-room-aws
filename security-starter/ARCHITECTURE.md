@@ -73,6 +73,23 @@ Two things in that diagram are the reason this module exists rather than Boot's 
   start with the pool unreachable, and no test context could load against a placeholder.
   A test found this; the javadoc had claimed the opposite.
 
+## The one anonymous path, and the first token's cost
+
+`GET /actuator/health` is permitted before any rule a service declares — the ALB cannot
+present a token, and a probe that needed one would mark every task unhealthy the moment
+the pool hiccupped. GET only, health only, a status word only. Everything else under
+`/actuator` is not exposed by the services in the first place (see `observability-starter`).
+
+`JwtDecoderWarmUp` runs after `ApplicationReadyEvent`, on a virtual thread, and hands the
+decoder a well-formed RS256 token for the issuer whose `kid` no real key has. Verifying it
+forces every deferred step — discovery document, JWKS, two TLS handshakes, the JIT meeting
+Nimbus — and then fails, which is the expected outcome; a token that *passed* would be the
+alarm. Slice 6 measured the first real token at **12.8 s** on 0.25 vCPU against 0.1 s for
+every one after; this moves that cost to startup without giving up the laziness that lets
+the service boot with the pool unreachable (an unreachable pool is logged, and the first
+real request pays as before). `ticketing.security.warm-up=false` disables it; the root
+build does so for every test JVM.
+
 ## Conditions
 
 Both beans are `@ConditionalOnMissingBean`, so a service (or a test) that defines its own
@@ -99,6 +116,10 @@ contacted.
 `TicketingSecurityFilterChainTest` — a throwaway application with one open endpoint and
 one declared ops-only, driven through the real filters: anonymous → 401 with a Bearer
 challenge; any valid token → the open endpoint, as its own `sub`; a customer's token on the
-ops endpoint → 403; the ops scope → 200. `TicketingSecurityAutoConfigurationTest` — the
-back-off and refuse-to-start conditions. `AccessTokenValidatorTest` — an ID token is
-refused on `token_use` alone.
+ops endpoint → 403; the ops scope → 200. `GET /actuator/health` → 200
+anonymously, `POST` to it → 401, and the old probe path `GET /` still 401 rather than 404
+or 500. `TicketingSecurityAutoConfigurationTest` — the back-off and refuse-to-start
+conditions, and the warm-up present by default and absent when switched off.
+`JwtDecoderWarmUpTest` — the probe token parses as RS256 for the issuer with `kid`
+`warm-up` and an all-zero signature; a rejected probe is not an error; an unreachable issuer
+is swallowed. `AccessTokenValidatorTest` — an ID token is refused on `token_use` alone.

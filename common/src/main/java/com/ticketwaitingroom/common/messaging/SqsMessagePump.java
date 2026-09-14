@@ -175,10 +175,16 @@ public final class SqsMessagePump {
                         .queueUrl(settings.queueUrl())
                         .maxNumberOfMessages(settings.batchSize())
                         .waitTimeSeconds((int) settings.pollWait().toSeconds())
-                        // Carried purely for the log line below: a receive count above 1 is
-                        // the visible symptom of a handler that keeps failing, and it is the
-                        // only warning before the message lands in the DLQ.
-                        .messageSystemAttributeNames(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT)
+                        // The receive count is carried purely for the log line below: above 1
+                        // it is the visible symptom of a handler that keeps failing, and the
+                        // only warning before the message lands in the DLQ. The trace header
+                        // is what the producer's SDK wrote so the consumer can continue its
+                        // trace; this loop never reads it, but it must ask for it or the
+                        // attribute is simply not delivered and every consumer starts a trace
+                        // of its own.
+                        .messageSystemAttributeNames(
+                                MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT,
+                                MessageSystemAttributeName.AWS_TRACE_HEADER)
                         .build())
                 .messages();
     }

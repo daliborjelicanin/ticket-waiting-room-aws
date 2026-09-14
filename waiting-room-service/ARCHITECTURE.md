@@ -62,6 +62,17 @@ the socket removes the need to poll, it is not what makes the answer true. With 
 `admission-queue-url` configured the publisher logs instead, which is what lets the service
 run locally with no AWS at all.
 
+## What the dashboard reads
+
+`WaitingRoomMetrics`: `waiting_room.joins{status}` and `waiting_room.admissions` are the
+top of the funnel; `waiting_room.admission.publish.failures` is the only signal that
+clients are back to polling. `waiting_room.queue.depth{event}` and
+`waiting_room.admitted{event}` are `ZCARD` of the two sorted sets (`WaitingRoomQueue.sizes`,
+two plain reads, nothing to be atomic with), refreshed every 30 s for the events this task
+has seen. Depth is the number the slice exists to show falling under admission and rising
+under a door-open. `admitted` counts lapsed passes until an admit reclaims them, so it is
+an upper bound between admissions.
+
 ## Redis keys
 
 All four share the `{eventId}` hashtag so a future clustered ElastiCache keeps them on

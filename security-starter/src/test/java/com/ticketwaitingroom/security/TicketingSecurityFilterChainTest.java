@@ -70,9 +70,19 @@ class TicketingSecurityFilterChainTest {
     }
 
     @Test
-    void theHealthCheckPathIsRefusedNotMissing() throws Exception {
-        // 401 sits inside the ALB matcher's 200-499, so the target stays healthy; the point
-        // of pinning it is that a future change to 404-or-500 here would be a real change.
+    void theHealthEndpointIsTheOneAnonymousDoor() throws Exception {
+        // The ALB probes this with no token. Only GET, only health, only the status word.
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"status\":\"UP\"}"));
+        mockMvc.perform(post("/actuator/health")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void theOldHealthCheckPathIsRefusedNotMissing() throws Exception {
+        // Before the health endpoint existed the probe read a 401 from GET / as "alive".
+        // Pinned so a target group still on the old path degrades to unhealthy-by-401 being
+        // inside its 200-499 matcher, never to a 404 or a 500 that looks like a real fault.
         mockMvc.perform(get("/")).andExpect(status().isUnauthorized());
     }
 

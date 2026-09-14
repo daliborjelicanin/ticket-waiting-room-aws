@@ -24,6 +24,9 @@ dependencies {
     // controller, not by asserting on bean definitions.
     testImplementation(libs.spring.boot.starter.web)
     testImplementation(libs.spring.boot.starter.webmvc.test)
+    // The health endpoint the chain opens for the ALB is actuator's; the starter itself
+    // only knows its path, so the test supplies the endpoint to prove the door works.
+    testImplementation(libs.spring.boot.starter.actuator)
     testImplementation(libs.spring.boot.starter.security.test)
     testImplementation(libs.bundles.testing)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

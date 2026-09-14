@@ -27,3 +27,44 @@ notification:
     threads: 1
     batch-size: 10
     poll-wait: PT20S
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health and nothing else: the ALB's probe. Metrics leave over OTLP, not over HTTP.
+        include: health
+  endpoint:
+    health:
+      # A status word, no components: this is anonymous, and the ALB only reads the code.
+      show-details: never
+  tracing:
+    sampling:
+      # Every request, for now. The load test is the point of slice 7 and X-Ray at 10%
+      # would show a tenth of it; revisit once the traffic is real rather than staged.
+      probability: 1.0
+    export:
+      otlp:
+        enabled: ${TELEMETRY_EXPORT_ENABLED:false}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+  otlp:
+    metrics:
+      export:
+        # One switch for both signals. Off locally, so a service with no collector beside it
+        # does not log a failed export every minute; on in ECS, where the endpoint is the
+        # ADOT collector sidecar on the task's loopback, which forwards to X-Ray and CloudWatch.
+        enabled: ${TELEMETRY_EXPORT_ENABLED:false}
+        url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: PT1M
+  metrics:
+    enable:
+      # Every exported series is a billable CloudWatch metric. Boot's JVM, Tomcat, logging
+      # and process meters are dozens of them and answer none of the dashboard's questions;
+      # the request timer and this service's own meters are what the dashboard reads.
+      all: false
+      http.server.requests: true
+      notifications: true

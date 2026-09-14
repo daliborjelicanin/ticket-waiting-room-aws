@@ -102,6 +102,20 @@ public class WaitingRoomQueue {
     }
 
     /**
+     * The two sorted sets' sizes, for the gauges. {@code admitted} counts passes whether
+     * they have lapsed — a lapsed pass stays in the set until an admit reclaims it or a
+     * re-join removes it, so under no admissions the number is an upper bound. Two plain
+     * reads, not a script: nothing here has to be atomic with anything.
+     */
+    public Sizes sizes(String eventId) {
+        Long waiting = redis.opsForZSet().zCard(queueKey(eventId));
+        Long admitted = redis.opsForZSet().zCard(admittedKey(eventId));
+        return new Sizes(waiting != null ? waiting : 0, admitted != null ? admitted : 0);
+    }
+
+    public record Sizes(long waiting, long admitted) { }
+
+    /**
      * Decodes the {status, position, queueLength, admissionExpiresAt, token} reply the join
      * and position scripts share. Both use {@code '0'} — and {@code ''} for the token — for
      * a field that does not apply, since a genuine nil would truncate the reply array on

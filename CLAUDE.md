@@ -64,6 +64,19 @@ alters its behaviour, and mark not-yet-built boxes as such.
   everything not declared needs a valid token and nothing more. Kept out of `common`
   because the Lambdas share `common` and must never see Spring Security. Registers itself
   for `@WebMvcTest` slices the way Boot's own starters do.
+- `observability-starter` — `java-library`, the observability counterpart of
+  `security-starter`: actuator's health endpoint (the one anonymous path, for the ALB),
+  Boot's OpenTelemetry starter for OTLP traces and metrics, and what X-Ray needs that Boot
+  does not know — X-Ray-shaped trace ids (a local `IdGenerator`; the contrib artifact
+  drags OkHttp, Jackson 2 and Caffeine along), the `X-Amzn-Trace-Id` propagator beside
+  W3C, an AWS SDK v2 tracing interceptor offered as one `ClientOverrideConfiguration`
+  bean, and `SqsMessageTracing` for the consumer side of a queue. Telemetry leaves over
+  **OTLP to a collector sidecar**, never through a CloudWatch or X-Ray SDK in the service:
+  Boot 4 dropped its CloudWatch registry auto-config, and one vendor-neutral pipeline is
+  what the EKS phase wants. `TELEMETRY_EXPORT_ENABLED` switches both exporters; off is the
+  local default. Each service keeps its own `XxxMetrics` with only the meters the dashboard
+  asks for — Boot's JVM/Tomcat series are disabled because every series is a billable
+  CloudWatch metric. Kept out of `common` for the same reason `security-starter` is.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.

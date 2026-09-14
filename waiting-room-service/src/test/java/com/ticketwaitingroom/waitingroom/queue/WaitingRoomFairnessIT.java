@@ -216,6 +216,18 @@ class WaitingRoomFairnessIT {
     }
 
     @Test
+    void sizesReadTheTwoSetsTheGaugesReport() {
+        Instant now = Instant.now();
+        assertThat(queue.sizes(eventId)).isEqualTo(new WaitingRoomQueue.Sizes(0, 0));
+        IntStream.range(0, 10).forEach(i -> queue.join(eventId, "cust-" + i, "t-" + i, now));
+        assertThat(queue.sizes(eventId)).isEqualTo(new WaitingRoomQueue.Sizes(10, 0));
+
+        queue.admitNext(eventId, 4, now.plusSeconds(600), now);
+
+        assertThat(queue.sizes(eventId)).isEqualTo(new WaitingRoomQueue.Sizes(6, 4));
+    }
+
+    @Test
     void admittedCustomerLeavesTheQueueAndCarriesAPass() {
         Instant now = Instant.now();
         Instant passExpiry = now.plusSeconds(600);

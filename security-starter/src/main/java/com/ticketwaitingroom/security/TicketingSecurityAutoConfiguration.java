@@ -2,6 +2,7 @@ package com.ticketwaitingroom.security;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -10,6 +11,7 @@ import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OA
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OAuth2ResourceServerProperties;
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.web.OAuth2ResourceServerWebSecurityAutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -40,10 +42,14 @@ import org.springframework.util.StringUtils;
  * auto-configuration, so Boot sees a {@code JwtDecoder} and a {@code SecurityFilterChain}
  * already present and contributes neither.
  *
- * <p><b>ALB health check.</b> {@code GET /} answers 401 rather than 404 under this chain.
- * The target group matcher is {@code 200-499}, so it stays healthy — and a stateless
- * resource server refusing an anonymous request is a correct answer from a working
- * process, not a fault.
+ * <p><b>ALB health check.</b> {@code GET /actuator/health} is the one anonymous path. A
+ * load balancer cannot present a token, and a probe that needs one would report every task
+ * unhealthy the moment the pool hiccupped — for a reason that says nothing about the task.
+ * Only the health endpoint is opened, only for GET, and it shows a status word and nothing
+ * else ({@code show-details} stays {@code never}); everything else under {@code /actuator}
+ * is not exposed by the services in the first place. (Before observability-starter existed
+ * the probe hit {@code GET /} and read the 401 as "alive"; see {@link JwtDecoderWarmUp}
+ * for the other thing that first request used to pay for.)
  */
 @AutoConfiguration(before = {
         SecurityAutoConfiguration.class,
@@ -62,6 +68,7 @@ public class TicketingSecurityAutoConfiguration {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(registry -> {
+                    registry.requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll();
                     rules.orderedStream().forEach(rule -> rule.configure(registry));
                     registry.anyRequest().authenticated();
                 })
@@ -96,5 +103,11 @@ public class TicketingSecurityAutoConfiguration {
                     JwtValidators.createDefaultWithIssuer(issuer), new AccessTokenValidator()));
             return decoder;
         });
+    }
+
+    @Bean
+    @ConditionalOnBooleanProperty(name = "ticketing.security.warm-up", matchIfMissing = true)
+    JwtDecoderWarmUp jwtDecoderWarmUp(JwtDecoder decoder, OAuth2ResourceServerProperties properties) {
+        return new JwtDecoderWarmUp(decoder, properties.getJwt().getIssuerUri());
     }
 }

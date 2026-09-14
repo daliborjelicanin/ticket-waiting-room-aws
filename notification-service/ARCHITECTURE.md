@@ -82,6 +82,19 @@ the send — deliberately deferred, because it means giving this service a datab
 duplicate confirmation email is a far cheaper defect than a duplicate ticket or a
 duplicate charge.
 
+## What the dashboard reads, and where the trace comes from
+
+`notifications.sent{outcome=sent|failed}` — from `PurchaseConfirmationMailer`. A failure
+is an SES refusal or outage; the message goes back on the queue and the retry is a second
+increment of one or the other. Sustained `failed` with the DLQ filling is the only signal
+this service gives that mail has stopped.
+
+The consumer runs each delivery in a span parented on the message's `AWSTraceHeader`. SNS
+forwards the header the saga's publish carried — provided raw message delivery is on, which
+it already must be for the body to parse — so the mail is the same X-Ray trace as the
+purchase. This service has no `security-starter`, so `/actuator/health` is open by default
+rather than by a rule; it is the first thing the port this task always had has answered.
+
 ## What the mail deliberately does not contain
 
 ```mermaid

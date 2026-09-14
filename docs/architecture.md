@@ -17,6 +17,7 @@ Per-module diagrams, with the internals each service is actually responsible for
 | `qr-generation-lambda` | [ARCHITECTURE.md](../qr-generation-lambda/ARCHITECTURE.md) | Bare-id message, deterministic key, partial batch failure |
 | `queue-socket-lambda` | [ARCHITECTURE.md](../queue-socket-lambda/ARCHITECTURE.md) | The admission notifier, the GSI lookup, why the connect routes have no code |
 | `security-starter` | [ARCHITECTURE.md](../security-starter/ARCHITECTURE.md) | The one filter chain every HTTP service runs; what a service declares, what it never has to |
+| `observability-starter` | [ARCHITECTURE.md](../observability-starter/ARCHITECTURE.md) | OTLP into a collector sidecar → X-Ray + CloudWatch; what X-Ray needs that Boot does not know; every meter each service exports |
 | `common` | [ARCHITECTURE.md](../common/ARCHITECTURE.md) | Who shares which contract, and what breaks when one drifts |
 
 ---
@@ -402,7 +403,31 @@ not a security one.
 
 ---
 
-## 7. Build status by slice
+## 7. Telemetry
+
+Built in code, not yet run on AWS (slice 7). Every Fargate service exports traces and
+metrics over OTLP to a collector on its own task's loopback — the ADOT collector as a
+sidecar — which forwards to X-Ray and CloudWatch. Nothing in a service knows the backend.
+The `X-Amzn-Trace-Id` header API Gateway and the ALB stamp on a request is joined, the
+AWS SDK interceptor writes the trace into every SQS message, and the consumers open their
+span under it, so a purchase is one trace from the edge through the saga, the queue and
+the issuance insert. The meters, and why each one, are in
+[`observability-starter/ARCHITECTURE.md`](../observability-starter/ARCHITECTURE.md).
+
+```mermaid
+flowchart LR
+    APIGW["API Gateway<br/>X-Amzn-Trace-Id"] --> SVC
+    subgraph task["Fargate task"]
+        SVC["service"] -->|"OTLP :4318"| ADOT["ADOT collector<br/>sidecar"]
+    end
+    SVC -->|"AWSTraceHeader on SendMessage"| Q[("SQS")] --> CONS["consumer<br/>span under the producer's trace"]
+    ADOT --> XR["X-Ray"]
+    ADOT --> CW["CloudWatch<br/>metrics via EMF"]
+    classDef planned stroke-dasharray:5 4;
+    class ADOT,XR,CW planned;
+```
+
+## 8. Build status by slice
 
 ```mermaid
 flowchart LR
@@ -412,13 +437,13 @@ flowchart LR
     S3 --> S4["4 · checkout saga<br/>Step Functions + RDS + SQS"]
     S4 --> S5["5 · issuance + notification<br/>SQS, S3, SNS, SES"]
     S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket done<br/>Cognito + WAF done · optional frontend open"]
-    S6 --> S7["7 · observability<br/>+ load test"]
+    S6 --> S7["7 · observability<br/>instrumentation in code done<br/>collector, dashboard, X-Ray, load test pending"]
     S7 --> S8["8 · wrap-up"]
 
     classDef done fill:#2f6f4f,stroke:#1d4632,color:#fff;
     classDef partial fill:#7a5c1e,stroke:#4d3a13,color:#fff;
     classDef todo stroke-dasharray:5 4;
     class S0,S1,S2,S3,S4,S5 done;
-    class S6 partial;
-    class S7,S8 todo;
+    class S6,S7 partial;
+    class S8 todo;
 ```

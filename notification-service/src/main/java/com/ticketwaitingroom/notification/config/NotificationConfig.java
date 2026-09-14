@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
@@ -22,12 +23,14 @@ public class NotificationConfig {
 
     private static final String SES = "ses";
 
+    /** Both clients carry observability-starter's {@code tracing} override: a span per call. */
     @Bean
     public SqsClient sqsClient(
             @Value("${aws.region}") String region,
-            @Value("${aws.sqs.endpoint:}") String endpoint) {
+            @Value("${aws.sqs.endpoint:}") String endpoint,
+            ClientOverrideConfiguration tracing) {
 
-        var builder = SqsClient.builder().region(Region.of(region));
+        var builder = SqsClient.builder().region(Region.of(region)).overrideConfiguration(tracing);
         if (StringUtils.hasText(endpoint)) {
             builder.endpointOverride(URI.create(endpoint)).credentialsProvider(localCredentials());
         }
@@ -37,9 +40,10 @@ public class NotificationConfig {
     @Bean
     public SesV2Client sesClient(
             @Value("${aws.region}") String region,
-            @Value("${aws.ses.endpoint:}") String endpoint) {
+            @Value("${aws.ses.endpoint:}") String endpoint,
+            ClientOverrideConfiguration tracing) {
 
-        var builder = SesV2Client.builder().region(Region.of(region));
+        var builder = SesV2Client.builder().region(Region.of(region)).overrideConfiguration(tracing);
         if (StringUtils.hasText(endpoint)) {
             builder.endpointOverride(URI.create(endpoint)).credentialsProvider(localCredentials());
         }

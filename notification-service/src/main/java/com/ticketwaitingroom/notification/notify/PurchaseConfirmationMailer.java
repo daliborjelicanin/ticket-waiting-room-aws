@@ -11,7 +11,7 @@ import java.util.Locale;
  * Renders and sends the purchase-confirmation email.
  *
  * <p>The mail deliberately does <strong>not</strong> embed the QR image or a presigned link
- * to it. This event fires when payment was captured, which is upstream of issuance and
+ * to it. This event fires when payment was capturhttps://github.com/daliborjelicanined, which is upstream of issuance and
  * rendering — the ticket may not exist yet, and a presigned URL minted here would be for an
  * object that is not in the bucket and would expire long before anyone opened it anyway. So
  * the mail links to the issuance service, which is the component that actually knows
@@ -24,9 +24,17 @@ public class PurchaseConfirmationMailer {
 
     private final NotificationSender sender;
     private final NotificationProperties properties;
+    private final NotificationMetrics metrics;
 
     public void send(PurchaseConfirmedEvent event) {
-        sender.send(render(event));
+        Email email = render(event);
+        try {
+            sender.send(email);
+        } catch (RuntimeException notSent) {
+            metrics.sent(false);
+            throw notSent;
+        }
+        metrics.sent(true);
     }
 
     Email render(PurchaseConfirmedEvent event) {

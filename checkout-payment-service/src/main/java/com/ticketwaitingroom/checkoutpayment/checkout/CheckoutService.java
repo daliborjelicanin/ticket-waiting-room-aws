@@ -11,8 +11,10 @@ import com.ticketwaitingroom.checkoutpayment.payment.GatewayResult;
 import com.ticketwaitingroom.checkoutpayment.payment.Payment;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentGateway;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentService;
+import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
 import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotFoundException;
+import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -39,6 +41,7 @@ public class CheckoutService {
     private final PaymentService paymentService;
     private final PaymentGateway paymentGateway;
     private final CheckoutProperties properties;
+    private final CheckoutMetrics metrics;
     private final Clock clock;
 
     /**
@@ -50,10 +53,16 @@ public class CheckoutService {
     @Transactional
     public Order createOrder(UUID orderId, String eventId, String customerRef, long amountCents,
                              String idempotencyKey, List<OrderSeat> seats) {
-        return orderRepository.findByIdempotencyKey(idempotencyKey)
-                .orElseGet(() -> orderRepository.saveAndFlush(Order.pending(
-                        orderId, eventId, customerRef, amountCents, properties.currency(),
-                        idempotencyKey, seats, clock.instant())));
+        Order existing = orderRepository.findByIdempotencyKey(idempotencyKey).orElse(null);
+        if (existing != null) {
+            metrics.orderCreated(false);
+            return existing;
+        }
+        Order order = orderRepository.saveAndFlush(Order.pending(
+                orderId, eventId, customerRef, amountCents, properties.currency(),
+                idempotencyKey, seats, clock.instant()));
+        metrics.orderCreated(true);
+        return order;
     }
 
     /**
@@ -77,23 +86,42 @@ public class CheckoutService {
      * a PENDING row rather than a charge nobody has any record of.
      */
     public ChargeOutcome charge(UUID orderId, String idempotencyKey, String paymentToken) {
+        try {
+            return chargeCounted(orderId, idempotencyKey, paymentToken);
+        } catch (ChargeInProgressException inFlight) {
+            metrics.charged("in_flight");
+            throw inFlight;
+        } catch (OrderNotPayableException settled) {
+            metrics.charged("not_payable");
+            throw settled;
+        }
+    }
+
+    private ChargeOutcome chargeCounted(UUID orderId, String idempotencyKey, String paymentToken) {
         AttemptClaim claim;
         try {
             claim = paymentService.beginAttempt(orderId, idempotencyKey, paymentToken, clock.instant());
         } catch (DataIntegrityViolationException conflict) {
             // A rival attempt won the insert race. The database already decided which of
             // the two constraints was hit; this just reports what that means.
-            return paymentService.resolveConflict(orderId, idempotencyKey, conflict);
+            ChargeOutcome replayed = paymentService.resolveConflict(orderId, idempotencyKey, conflict);
+            metrics.charged("replayed");
+            return replayed;
         }
 
         return switch (claim) {
             // Already decided: return the original answer without touching the gateway.
-            case AttemptClaim.AlreadySettled settled -> settled.outcome();
+            case AttemptClaim.AlreadySettled settled -> {
+                metrics.charged("replayed");
+                yield settled.outcome();
+            }
             case AttemptClaim.Claimed claimed -> {
                 Payment attempt = claimed.payment();
-                GatewayResult result = paymentGateway.charge(new GatewayCharge(
-                        idempotencyKey, paymentToken, attempt.getAmountCents(), attempt.getCurrency()));
-                yield paymentService.completeAttempt(attempt.getId(), result, clock.instant());
+                GatewayResult result = metrics.timeGateway(() -> paymentGateway.charge(new GatewayCharge(
+                        idempotencyKey, paymentToken, attempt.getAmountCents(), attempt.getCurrency())));
+                ChargeOutcome outcome = paymentService.completeAttempt(attempt.getId(), result, clock.instant());
+                metrics.charged(CheckoutMetrics.outcomeOf(result));
+                yield outcome;
             }
         };
     }

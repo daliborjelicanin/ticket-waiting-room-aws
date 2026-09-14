@@ -10,6 +10,11 @@ assertj = "3.27.7"
 mockito = "5.20.0"
 lombok = "1.18.38"
 zxing = "3.5.3"
+# Both compiled against OpenTelemetry 1.62.0, the version Boot 4.1.0's BOM manages. Bumping
+# one without the other leaves a mixed OTel API/SDK on the classpath -- check the artifact's
+# pom for the opentelemetry-api version it declares before moving either.
+otelAwsXray = "1.57.0-alpha"
+otelInstrumentation = "2.28.0-alpha"
 
 [libraries]
 spring-boot-starter-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "springBoot" }
@@ -20,10 +25,30 @@ spring-boot-flyway = { module = "org.springframework.boot:spring-boot-flyway", v
 # Every HTTP service is an OAuth2 resource server: it verifies the caller's JWT against the Cognito user pool itself,
 # rather than trusting a header the edge injected. SeeTicketingScopes in common for the one string Cognito and the services must agree on.
 spring-boot-starter-oauth2-resource-server = { module = "org.springframework.boot:spring-boot-starter-oauth2-resource-server", version.ref = "springBoot" }
+# Health endpoint only; metrics arrive through the OpenTelemetry starter below.
+spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator", version.ref = "springBoot" }
+# OTLP export for traces AND metrics. Boot 4 dropped its CloudWatch metrics auto-configuration
+# (the Micrometer registry moved to Spring Cloud AWS), and OTLP into a collector sidecar is
+# the one path that lands in both X-Ray and CloudWatch without an AWS SDK in the pipeline.
+spring-boot-starter-opentelemetry = { module = "org.springframework.boot:spring-boot-starter-opentelemetry", version.ref = "springBoot" }
+spring-boot-starter-opentelemetry-test = { module = "org.springframework.boot:spring-boot-starter-opentelemetry-test", version.ref = "springBoot" }
 spring-boot-starter-webmvc-test = { module = "org.springframework.boot:spring-boot-starter-webmvc-test", version.ref = "springBoot" }
 spring-boot-starter-security-test = { module = "org.springframework.boot:spring-boot-starter-security-test", version.ref = "springBoot" }
 flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql" }
 postgresql = { module = "org.postgresql:postgresql" }
+# The X-Ray trace header (X-Amzn-Trace-Id) as an OTel propagator: what API Gateway, ALB and
+# the SQS AWSTraceHeader attribute carry. The propagator artifact alone -- the full
+# opentelemetry-aws-xray brings okhttp, Jackson 2 and Caffeine for a remote sampler nobody
+# here uses; the trace-id generator it would also supply is twenty lines, written locally.
+opentelemetry-aws-xray-propagator = { module = "io.opentelemetry.contrib:opentelemetry-aws-xray-propagator", version.ref = "otelAwsXray" }
+# ExecutionInterceptor for AWS SDK v2 clients: a span per DynamoDB/SQS/S3/SES call, and the
+# trace header injected into outgoing SQS messages so a consumer can continue the trace.
+opentelemetry-aws-sdk = { module = "io.opentelemetry.instrumentation:opentelemetry-aws-sdk-2.2", version.ref = "otelInstrumentation" }
+opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testing" }
+# The OTLP exporter's HTTP sender on java.net.http instead of its default OkHttp -- which
+# brings OkHttp, Okio and the Kotlin standard library into every service image for one
+# POST a minute to localhost.
+opentelemetry-exporter-sender-jdk = { module = "io.opentelemetry:opentelemetry-exporter-sender-jdk" }
 aws-sdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awsSdk" }
 aws-sdk-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
 aws-sdk-sqs = { module = "software.amazon.awssdk:sqs" }

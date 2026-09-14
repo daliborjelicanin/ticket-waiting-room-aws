@@ -15,6 +15,11 @@ dependencies {
     // so without it the JVM starts, subscribes and exits. Slice 6 also wants a port here for
     // the ALB's health check.
     implementation(libs.spring.boot.starter.web)
+    // Health endpoint (the port above finally has something to answer with), OTLP traces and
+    // metrics, SDK call spans, and the consumer-side span that continues the purchase's trace.
+    // No security-starter here -- nothing to authorise -- so /actuator/health is open by
+    // default rather than by a rule.
+    implementation(project(":observability-starter"))
 
     implementation(platform(libs.aws.sdk.bom))
     // Declared here rather than inherited from :common, which exposes SqsMessagePump

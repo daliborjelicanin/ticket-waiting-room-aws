@@ -128,6 +128,19 @@ Three properties, in the order they matter:
    a successful handler whose delete failed, and a shutdown mid-batch. Every handler wired
    to this class must be idempotent; that is a requirement of the transport.
 
+## What the dashboard reads, and where the trace comes from
+
+`tickets.issued{outcome=issued|duplicate}` — one counter, from `TicketIssuanceService`.
+`duplicate` is a delivery that lost to `uq_tickets_order_seat`, ordinary under at-least-once
+and the first thing to climb when a producer starts retrying; the ratio is the queue's
+redelivery rate, read from the only place that can see it.
+
+The consumer wraps its handler in `observability-starter`'s `SqsMessageTracing`, so each
+delivery runs in a span parented on the `AWSTraceHeader` the saga's `SendMessage` wrote:
+in X-Ray the enqueue and the insert are one trace with a queue in the middle. The SQS and
+S3 clients carry the SDK tracing interceptor; the presigner does not, since it signs
+locally and never makes a call worth a span.
+
 ## QR download
 
 ```mermaid

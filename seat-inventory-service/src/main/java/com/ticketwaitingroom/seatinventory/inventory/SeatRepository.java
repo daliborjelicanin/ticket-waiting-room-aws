@@ -8,6 +8,9 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
+import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
+import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
+import software.amazon.awssdk.services.dynamodb.model.Select;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
 import java.time.Instant;
@@ -202,6 +205,40 @@ public class SeatRepository {
                 SeatStatus.valueOf(item.get(ATTR_STATUS).s()),
                 item.containsKey(ATTR_HOLD_ID) ? item.get(ATTR_HOLD_ID).s() : null,
                 ttl != null ? Instant.ofEpochSecond(Long.parseLong(ttl.n())) : null);
+    }
+
+    /**
+     * How many of an event's seats are still {@link SeatStatus#AVAILABLE}. A count, not a
+     * listing: {@code Select.COUNT} returns numbers, never items, so a stadium-sized event
+     * costs read capacity but not memory. The filter runs server-side after the key match,
+     * which is what makes {@code count()} the post-filter figure and what makes the paging
+     * loop necessary — DynamoDB pages on the 1 MB it <em>read</em>, not on what survived
+     * the filter, so a page can legitimately report a count of zero and still have a next
+     * key. Feeds the {@code seats.remaining} gauge; not on any request path.
+     */
+    public long countAvailable(String eventId) {
+        long available = 0;
+        Map<String, AttributeValue> startKey = null;
+        do {
+            QueryResponse page = dynamo.query(QueryRequest.builder()
+                    .tableName(tableName)
+                    .keyConditionExpression("#pk = :pk AND begins_with(#sk, :seatPrefix)")
+                    .filterExpression("#status = :available")
+                    .expressionAttributeNames(Map.of(
+                            "#pk", ATTR_PK,
+                            "#sk", ATTR_SK,
+                            "#status", ATTR_STATUS))
+                    .expressionAttributeValues(Map.of(
+                            ":pk", s(pk(eventId)),
+                            ":seatPrefix", s(sk("")),
+                            ":available", s(SeatStatus.AVAILABLE.name())))
+                    .select(Select.COUNT)
+                    .exclusiveStartKey(startKey)
+                    .build());
+            available += page.count();
+            startKey = page.hasLastEvaluatedKey() ? page.lastEvaluatedKey() : null;
+        } while (startKey != null);
+        return available;
     }
 
     private static AttributeValue s(String value) {
