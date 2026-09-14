@@ -22,12 +22,13 @@ Phase-1 simplification, in the same family as "no NAT Gateway".
 explicitly out of scope for Phase 1. APIGW→ALB therefore runs unencrypted inside AWS's
 network. Revisit in Phase 2 alongside the custom domain.
 
-**Health checks use a matcher, not `/actuator/health`.** No service has the actuator
-dependency, so no path returns 200 without side effects (`/` returns 404, and every
-real endpoint mutates something). Target groups therefore health-check `/` with success
-codes `200-499`, which proves "Tomcat is up and routing" and nothing more. The honest
-fix is adding `spring-boot-starter-actuator` to the four services and rebuilding the
-images — worth doing before slice 7's observability work, not worth blocking this on.
+**Health checks use a matcher, not `/actuator/health`** — *superseded 2026-09-14, kept for
+the record.* At the time no service had the actuator dependency, so no path returned 200
+without side effects (`/` returned 404, and every real endpoint mutates something). Target
+groups therefore health-checked `/` with success codes `200-499`, which proved "Tomcat is
+up and routing" and nothing more. Slice 7 added the actuator through `observability-starter`
+and moved all four target groups to `/actuator/health` with matcher `200`
+(`runbook-observability.md` §7); the table in §2 below shows the original values.
 
 **ALB spans two AZs, tasks stay in one.** An ALB requires subnets in ≥2 AZs; that
 costs nothing extra. Cross-zone load balancing is on by default for ALB, so a target

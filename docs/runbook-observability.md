@@ -1,8 +1,8 @@
 # Runbook — Observability: ADOT Sidecar, X-Ray, CloudWatch
 
 Slice 7, the AWS half. The code half — `observability-starter`, one `XxxMetrics` per
-service, the JWT warm-up — landed in `4262e76` and its five images are in ECR under that
-tag. This runbook makes the telemetry those images emit *land somewhere*: an ADOT
+service, the JWT warm-up — landed in `4262e76`, the `service` metric tag in `5e3c555`, and
+the five images built from `5e3c555` are in ECR under that tag. This runbook makes the telemetry those images emit *land somewhere*: an ADOT
 collector beside every service, the permissions it needs, and the log groups it writes.
 Sections for X-Ray on the edge and the dashboard follow once the sidecar has run.
 
@@ -43,8 +43,8 @@ queryable in Logs Insights, which is a bonus the dashboard will use.
 attributes dimensions unless told to convert all of them — which would also make
 `telemetry.sdk.version` a dimension. So each service tags every meter with
 `service=<spring.application.name>` (`management.metrics.tags.service`), one line of YAML,
-and five services' `http.server.requests` stay five metrics. That line was added after
-the `4262e76` images were pushed; **the images must be rebuilt** (see *What To Bring Up First*).
+and five services' `http.server.requests` stay five metrics. That line landed in
+`5e3c555`, after the first `4262e76` push — the images were rebuilt once more for it.
 
 **Collector failure never stops the service.** `essential: false` on the sidecar and a
 `START` (not `HEALTHY`) dependency from the app container: if the collector dies the task
@@ -74,28 +74,12 @@ flowchart LR
 
 ## What To Bring Up First
 
-Nothing billable. Everything in this runbook is done against torn-down services: the
-task definition revisions wait for the next stack-up, which creates the five services from
-them. Before the console work, **rebuild and push the images once more**, because the
-`service` metric tag was added after `4262e76`:
-
-```bash
-git commit -am "Tag every meter with the service name"   # or whatever the commit is
-JAVA_HOME=… ./gradlew bootJar
-export DOCKER_HOST=unix:///var/run/docker.sock
-REG=<account-id>.dkr.ecr.eu-central-1.amazonaws.com; SHA=$(git rev-parse --short HEAD)
-aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin $REG
-for s in seat-inventory-service waiting-room-service checkout-payment-service ticket-issuance-service notification-service; do
-  docker build --platform linux/amd64 --no-cache -t "${s}:local" "$s"        # braces: see the ECR runbook's zsh trap
-  docker tag "${s}:local" "${REG}/${s}:${SHA}"; docker tag "${s}:local" "${REG}/${s}:latest"
-  docker push "${REG}/${s}:${SHA}"; docker push "${REG}/${s}:latest"
-done
-# then compare imagePushedAt, not just tags:
-aws ecr describe-images --repository-name seat-inventory-service --region eu-central-1 \
-  --query 'sort_by(imageDetails,&imagePushedAt)[].[imageTags,imagePushedAt]' --output text
-```
-
-Write the SHA down; the task definitions below pin it.
+Nothing billable. Everything in §1–§8 is done against torn-down services: the task
+definition revisions, target groups and tracing toggles wait for the next stack-up, which
+creates the five services from them. The images are already pushed — `5e3c555`, all five,
+2026-09-14 20:25–20:27, each verified to carry both starters and the `service` tag. If
+they ever need rebuilding, the loop is in `runbook-ecr-packaging.md` §3; brace every
+expansion and compare `imagePushedAt` afterwards, for the reason recorded there.
 
 ## Console Steps
 
@@ -286,52 +270,80 @@ Name `ReadCollectorConfig` → **Create policy**. It sits beside the existing
 
 ### 6. Five task definition revisions (ECS → Task definitions)
 
-The same edit five times. For each family — `seat-inventory-service`,
-`waiting-room-service`, `checkout-payment-service`, `ticket-issuance-service`,
-`notification-service` — open the family, tick the **latest revision**, **Create new
-revision ▾ → Create new revision**. The form opens pre-filled from that revision; change
-only what is listed.
+The same edit five times. Everything referenced below exists after §1–§5; the image tag to
+pin is **`5e3c555`** (pushed 2026-09-14 20:25–20:27, the build that carries the `service`
+metric tag). Do **not** use the console's own *Monitoring → Use trace collection / Use
+metric collection* toggles: they inject an ADOT sidecar with the image's default config,
+which is the generic-namespace, roll-ups-on setup §1 replaces. Leave both unticked.
 
-**Infrastructure requirements**
+**6.0 Open the family.** ECS → left nav **Task definitions** → click the family name
+(e.g. `seat-inventory-service`) → tick the **latest** revision (`seat-inventory-service:4`,
+`waiting-room-service:3`, `checkout-payment-service:6`, `ticket-issuance-service:4`,
+`notification-service:2` as of 2026-09-14) → **Create new revision ▾ → Create new
+revision**. The form opens pre-filled from that revision; change only what follows.
+
+**6.1 Infrastructure requirements** (the first collapsible section)
 
 | Field | Value |
 |---|---|
-| Task size → Memory | **1 GB** (CPU stays .25 vCPU) |
-| Task role | unchanged, except **checkout-payment-service → `ticket-checkout-task-role`** |
+| Launch type | AWS Fargate (unchanged) |
+| Operating system/Architecture | Linux/X86_64 (unchanged) |
+| Task size → CPU | .25 vCPU (unchanged) |
+| Task size → **Memory** | **1 GB** |
+| Task role | unchanged for four; **checkout-payment-service → `ticket-checkout-task-role`** (the dropdown lists roles trusting `ecs-tasks`; it appears because §4 created it) |
 | Task execution role | `ticket-ecs-execution-role` (unchanged) |
 
-**Container 1 — the service** (expand it; it is already there)
+**6.2 Container - 1** (the service; expand it)
 
 | Field | Value |
 |---|---|
-| Image URI | the SHA tag of the freshly pushed image, e.g. `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/seat-inventory-service:<SHA>` — the previous revision pinned a digest, and that digest is the image *without* the starter |
-| Environment variables → Add | `TELEMETRY_EXPORT_ENABLED` = `true` (Value) |
-| | `OTLP_ENDPOINT` = `http://localhost:4318` (Value) |
-| Startup dependency ordering → Add | container `aws-otel-collector`, condition **Start** — the collector is up before the first export; the service does not wait for it to be *healthy* and does not die with it |
+| Name | unchanged (`seat-inventory-service` …) |
+| Image URI | `<account-id>.dkr.ecr.eu-central-1.amazonaws.com/<service>:5e3c555` — replace the `@sha256:…` digest the previous revision pinned; that digest is the image *without* the starter |
+| Essential container | Yes (unchanged) |
+| Port mappings | `8080` TCP, HTTP (unchanged) |
+| Resource allocation limits → Memory hard limit | **768** (MiB). New. The JVM's `MaxRAMPercentage=75` reads the container's limit; without one it reads the task's 1 GB and would size a heap that overlaps the sidecar's |
+| Environment variables → **Add environment variable** | Key `TELEMETRY_EXPORT_ENABLED`, Value type **Value**, Value `true` |
+| → **Add environment variable** | Key `OTLP_ENDPOINT`, Value type **Value**, Value `http://localhost:4318` |
+| everything already there | leave: `COGNITO_ISSUER_URI`, `AWS_REGION`, queue URLs, `DB_URL`, the two `ValueFrom` secrets on checkout and issuance, the `awslogs` block |
+| Startup dependency ordering → **Add container dependency** | Container name `aws-otel-collector` (type it — the dropdown only lists containers that exist when the form was opened, and the sidecar is added below), Condition **Start** |
 
-Everything else — the `COGNITO_ISSUER_URI`, queue URLs, `DB_URL`, the `valueFrom` secrets,
-the `awslogs` block — stays as the previous revision had it.
+`Start`, not `Healthy` or `Success`: the service must not wait on, or die with, its
+telemetry.
 
-**Container 2 — the sidecar** → **Add container**
+**6.3 + Add container** (the sidecar)
 
 | Field | Value |
 |---|---|
 | Name | `aws-otel-collector` |
-| Image URI | `public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0` (latest tag on 2026-09-14; pin it, never `latest`) |
+| Image URI | `public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0` — the newest tag on 2026-09-14; never `latest` |
 | Essential container | **No** |
-| Port mappings | none — the service reaches it over the task's loopback, nothing reaches it from outside |
-| Resource allocation limits | CPU `0` (share), Memory hard limit **256**, Memory soft limit **128** |
-| Environment variables → Add | `AOT_CONFIG_CONTENT`, **ValueFrom**, `arn:aws:ssm:eu-central-1:<account-id>:parameter/ticket-waiting-room/otel-collector-config` |
-| Logging → Use log collection | awslogs · group `/ecs/otel-collector` · region `eu-central-1` · stream prefix **the service's name** (e.g. `seat-inventory-service`) — five sidecars share one group, the prefix is how they stay apart |
-| HealthCheck → Command | `CMD,/healthcheck` · interval 10 · timeout 5 · start period 10 · retries 3 |
+| Port mappings | none. Delete the empty row the form offers; the service reaches it on the task's loopback |
+| Resource allocation limits → CPU | `0` (share what is left) |
+| → Memory hard limit | **256** |
+| → Memory soft limit | **128** |
+| Environment variables → Add | Key `AOT_CONFIG_CONTENT`, Value type **ValueFrom**, Value `arn:aws:ssm:eu-central-1:<account-id>:parameter/ticket-waiting-room/otel-collector-config` |
+| Logging → **Use log collection** | ticked · `awslogs` · Add key/value: `awslogs-group` = `/ecs/otel-collector` · `awslogs-region` = `eu-central-1` · `awslogs-stream-prefix` = **the service's name** (e.g. `seat-inventory-service`) |
+| | Untick **Create log group** (`awslogs-create-group`) if the console added it — the group exists from §2 and the execution role may not create groups |
+| HealthCheck → Command | `CMD,/healthcheck` (the console splits on commas) · Interval `10` · Timeout `5` · Start period `10` · Retries `3` |
+| Startup dependency ordering | none |
 
-The `/healthcheck` binary ships in the image and calls the `health_check` extension the
-config enables. `ValueFrom` on a plain environment variable is what the console offers for
-"SSM parameter or secret"; in the JSON it lands under `secrets`, not `environment`, which
-is why the *execution* role needed the permission in step 5.
+`/healthcheck` is a binary in the ADOT image that calls the `health_check` extension the
+config enables. The `ValueFrom` type on a plain environment variable is what the console
+offers for "a parameter or a secret"; in the stored JSON it lands under `secrets`, which is
+why the *execution* role got the permission in §5.
 
-**Create.** The new revision number appears; note it — the next stack-up's service
-create/update points at it. Repeat for the other four families.
+**6.4 Storage, Monitoring, Tags** — Storage: ephemeral 21 GiB, unchanged. **Monitoring:
+both toggles off** (see the note at the top of §6). Tags: `project=ticket-waiting-room`
+(carried over; confirm it is there).
+
+**6.5 Create.** The page shows the new revision (`seat-inventory-service:5` …). Open its
+**JSON** tab and read three things back before moving on: `"memory": "1024"`, the sidecar's
+`"secrets": [{"name": "AOT_CONFIG_CONTENT", …}]`, and the service container's
+`"dependsOn": [{"containerName": "aws-otel-collector", "condition": "START"}]`. Then repeat
+6.0–6.5 for the other four families.
+
+Write the five new revision numbers into the table in *Results* below; the next stack-up's
+service creation points at them.
 
 **JSON alternative.** *Create new revision with JSON* takes the previous revision's JSON
 with these edits. The sidecar block to paste into `containerDefinitions`, and the fields to
@@ -366,7 +378,8 @@ change on the service container:
 
 ```jsonc
 // on the service container:
-"image": "<account-id>.dkr.ecr.eu-central-1.amazonaws.com/<service>:<SHA>",
+"image": "<account-id>.dkr.ecr.eu-central-1.amazonaws.com/<service>:5e3c555",
+"memory": 768,
 "environment": [ /* existing… */,
   { "name": "TELEMETRY_EXPORT_ENABLED", "value": "true" },
   { "name": "OTLP_ENDPOINT", "value": "http://localhost:4318" } ],
@@ -380,7 +393,7 @@ change on the service container:
 the previous runbooks set is retyped:
 
 ```bash
-SHA=<the pushed sha>; REG=<account-id>.dkr.ecr.eu-central-1.amazonaws.com
+SHA=5e3c555; REG=<account-id>.dkr.ecr.eu-central-1.amazonaws.com
 PARAM=arn:aws:ssm:eu-central-1:<account-id>:parameter/ticket-waiting-room/otel-collector-config
 for s in seat-inventory-service waiting-room-service checkout-payment-service ticket-issuance-service notification-service; do
   aws ecs describe-task-definition --region eu-central-1 --task-definition $s --query taskDefinition \
@@ -389,6 +402,7 @@ for s in seat-inventory-service waiting-room-service checkout-payment-service ti
       | .memory = "1024"
       | (if $s == "checkout-payment-service" then .taskRoleArn = "arn:aws:iam::<account-id>:role/ticket-checkout-task-role" else . end)
       | .containerDefinitions[0].image = $img
+      | .containerDefinitions[0].memory = 768
       | .containerDefinitions[0].environment += [{name:"TELEMETRY_EXPORT_ENABLED",value:"true"},{name:"OTLP_ENDPOINT",value:"http://localhost:4318"}]
       | .containerDefinitions[0].dependsOn = [{containerName:"aws-otel-collector",condition:"START"}]
       | .containerDefinitions += [{
@@ -403,39 +417,193 @@ for s in seat-inventory-service waiting-room-service checkout-payment-service ti
 done
 ```
 
-### 7. Bring one task up and read the three log groups
+### 7. Target groups → `/actuator/health` (EC2 → Target groups)
 
-The next stack-up follows each service's own runbook with the new revision number. Bring
-**seat-inventory-service** up first — it needs only DynamoDB — and before anything else:
+The four target groups survive teardown (the ALB does not), so this is done now, at $0,
+and is in force the moment the next ALB attaches them. For each of `seat-inventory-tg`,
+`waiting-room-tg`, `checkout-tg`, `ticket-issuance-tg`: open it → **Health checks** tab →
+**Edit**:
+
+| Field | Was | Now |
+|---|---|---|
+| Health check path | `/` | **`/actuator/health`** |
+| Advanced → Success codes | `200-499` | **`200`** |
+| everything else | 10 s interval, 2/2 thresholds, 5 s timeout, traffic port | unchanged |
+
+**Save changes.** The old matcher accepted the 401 that `GET /` produced as "alive", which
+proved Tomcat was up and nothing more (`runbook-alb-apigateway.md`, health-check decision).
+`/actuator/health` is the one path the security chain opens anonymously
+(`security-starter`), answers `{"status":"UP"}`, and a service that boots into a broken
+state — no datasource, no Redis — now reports it. Bring the ALB up with a revision *older*
+than §6 and its target goes unhealthy on 404: that is the check working, not a regression.
 
 ```bash
-# 1. the sidecar started, read its config, and is ready
-aws logs tail /ecs/otel-collector --region eu-central-1 --since 5m | grep -E "Everything is ready|error|invalid"
-
-# 2. the service booted, warmed the decoder, and is exporting (no failed-export lines)
-aws logs tail /ecs/seat-inventory-service --region eu-central-1 --since 5m \
-  | grep -E "JWT decoder warm|JWT warm-up|Started|Failed to export|Connection refused"
-#    → "JWT decoder warm: issuer metadata and keys fetched in N ms" — N is the number
-#      slice 6 measured at 12.8 s when a customer paid it
-
-# 3. EMF is arriving (allow two export steps, ~2 min)
-aws logs tail /ticket-waiting-room/metrics --region eu-central-1 --since 3m | head -c 600
-#    → JSON with "_aws":{"CloudWatchMetrics":[{"Namespace":"TicketWaitingRoom", ...
-
-# 4. and CloudWatch has turned it into a namespace with our dimensions
-aws cloudwatch list-metrics --region eu-central-1 --namespace TicketWaitingRoom \
-  --query 'Metrics[].[MetricName, join(`,`, Dimensions[].Name)]' --output text | sort -u | head -20
-#    → http.server.requests  service,uri,method,status,outcome,exception,error …
-
-# 5. one seeded event, one hold, and the first trace
-curl … POST /admin/events/evt-o/seats (ops token) ; curl … POST hold (ops token)   # per the seat-inventory runbook
-aws xray get-trace-summaries --region eu-central-1 --start-time $(date -u -d '-10 min' +%s) --end-time $(date -u +%s) \
-  --query 'TraceSummaries[].[Id, Duration, Http.HttpURL]' --output text
+for tg in seat-inventory-tg waiting-room-tg checkout-tg ticket-issuance-tg; do
+  ARN=$(aws elbv2 describe-target-groups --region eu-central-1 --names $tg --query 'TargetGroups[0].TargetGroupArn' --output text)
+  aws elbv2 modify-target-group --region eu-central-1 --target-group-arn $ARN \
+    --health-check-path /actuator/health --matcher HttpCode=200
+done
+aws elbv2 describe-target-groups --region eu-central-1 --query 'TargetGroups[].[TargetGroupName,HealthCheckPath,Matcher.HttpCode]' --output text
 ```
 
-Claim 5 is where X-Ray first shows a segment named `seat-inventory-service` with a
-`DynamoDB` subsegment under it — the SDK interceptor's client span — and, from the
-scheduled refresh, a `seats.remaining` gauge for `evt-o` in the namespace within a minute.
+### 8. Tracing on the edge, the saga and the Lambdas
+
+All three are toggles, all free, all reversible, all done now against torn-down services.
+
+**8.1 API Gateway stage** — API Gateway → APIs → `ticket-edge` → **Stages → dev** →
+**Logs and tracing** panel → **Edit** → **X-Ray tracing: on** → **Save changes**. From
+now on every request through the stage gets an `X-Amzn-Trace-Id` with `Root`, `Parent` and
+`Sampled`; the ALB forwards it, the service's X-Ray propagator joins it, and the API
+Gateway segment is the root the service's segment hangs from. (`tracingEnabled` was
+`false` on 2026-09-14.) No IAM: API Gateway writes its own segments.
+
+**8.2 Step Functions** — Step Functions → State machines → `checkout-saga` → **Edit** →
+the **Config** tab (gear icon at the top of the editor) → **Tracing → Enable X-Ray
+tracing** → **Save** — this creates a new state machine *version* with the same definition.
+The console offers to add `xray:PutTraceSegments`, `xray:PutTelemetryRecords`,
+`xray:GetSamplingRules`, `xray:GetSamplingTargets` to `ticket-saga-role`; accept, or add
+that inline policy by hand first. With tracing on, Step Functions emits a segment per
+execution and one per state, and propagates the trace to its Lambda, SQS and SNS
+integrations. Whether it forwards `X-Amzn-Trace-Id` on an `http:invoke` call is the open
+question this slice answers; §9 claim 4 below reads it off the first purchase.
+
+**8.3 Lambdas** — for each of `hold-cleanup`, `qr-generation`, `ticket-queue-notifier`:
+Lambda → Functions → the function → **Configuration** tab → **Monitoring and operations
+tools** → **Edit** → **AWS X-Ray → Active tracing: on** → **Save**. The console attaches
+`AWSXRayDaemonWriteAccess` to the function's role if it is missing (it is, on all three).
+The functions are not OTel-instrumented — a DI-free Lambda stays that way — so what X-Ray
+shows is the Lambda service's own segment: init duration, invocation, the SQS source for
+`qr-generation` and the notifier. That is enough to see the QR render hanging off the
+purchase's trace, which is the point.
+
+```bash
+aws apigateway update-stage --region eu-central-1 --rest-api-id <rest-api-id> --stage-name dev \
+  --patch-operations op=replace,path=/tracingEnabled,value=true
+aws iam put-role-policy --role-name ticket-saga-role --policy-name XRay --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["xray:PutTraceSegments","xray:PutTelemetryRecords","xray:GetSamplingRules","xray:GetSamplingTargets"],"Resource":"*"}]}'
+aws stepfunctions update-state-machine --region eu-central-1 \
+  --state-machine-arn arn:aws:states:eu-central-1:<account-id>:stateMachine:checkout-saga \
+  --tracing-configuration enabled=true
+for f in hold-cleanup qr-generation ticket-queue-notifier; do
+  ROLE=$(aws lambda get-function-configuration --region eu-central-1 --function-name $f --query 'Role' --output text | awk -F/ '{print $NF}')
+  aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+  aws lambda update-function-configuration --region eu-central-1 --function-name $f --tracing-config Mode=Active --query 'TracingConfig.Mode' --output text
+done
+```
+
+### 9. Bring the stack up and read it back
+
+The next stack-up follows each service's own runbook — ALB, RDS, ElastiCache, then the
+five services — with the §6 revision numbers in place of the old ones. Bring
+**seat-inventory-service** up first: it needs only DynamoDB, and every claim below except
+the last can be made against it alone. Every numbered line is a claim; *Results* is where
+each becomes a number.
+
+```bash
+# 1. the sidecar started, read its config from SSM, and is ready
+aws logs tail /ecs/otel-collector --region eu-central-1 --since 5m | grep -E "Everything is ready|error|invalid|AccessDenied"
+
+# 2. the service booted, warmed the decoder, and is exporting without complaint
+aws logs tail /ecs/seat-inventory-service --region eu-central-1 --since 5m \
+  | grep -E "JWT decoder warm|JWT warm-up|Started|Failed to export|Connection refused"
+#    → "JWT decoder warm: issuer metadata and keys fetched in N ms" — N against slice 6's 12.8 s
+
+# 3. EMF is arriving (two export steps, ~2 min), and the log-writing half of the policy works
+aws logs tail /ticket-waiting-room/metrics --region eu-central-1 --since 3m | head -c 600
+#    → {"_aws":{"CloudWatchMetrics":[{"Namespace":"TicketWaitingRoom","Dimensions":[["service", …
+
+# 4. CloudWatch has a namespace with our dimensions
+aws cloudwatch list-metrics --region eu-central-1 --namespace TicketWaitingRoom \
+  --query 'Metrics[].[MetricName, join(`,`, Dimensions[].Name)]' --output text | sort -u
+#    → http.server.requests   error,exception,method,outcome,service,status,uri
+#    → seats.remaining        event,service                       (after the first hold, ≤ 60 s)
+
+# 5. the ALB reads the new health check: target healthy on /actuator/health, not on a 401
+aws elbv2 describe-target-health --region eu-central-1 --target-group-arn <seat-inventory-tg arn> \
+  --query 'TargetHealthDescriptions[].TargetHealth.State' --output text          # healthy
+
+# 6. one request through the edge = one trace: APIGW segment → seat-inventory-service → DynamoDB
+curl … POST /admin/events/evt-o/seats  (ops token)  ;  curl … POST …/seats/O-1/hold  (ops token)
+aws xray get-trace-summaries --region eu-central-1 --start-time $(date -u -d '-10 min' +%s) --end-time $(date -u +%s) \
+  --query 'TraceSummaries[].[Id, Duration, Http.HttpURL, join(`,`, ServiceIds[].Name)]' --output text
+```
+
+Then in the console — **CloudWatch → X-Ray traces → Trace map**: three nodes,
+`ticket-edge/dev` → `seat-inventory-service` → `DynamoDB`, and under **Traces** the hold
+request with a `DynamoDB.UpdateItem` subsegment. A second hold on the same seat shows the
+same shape with the subsegment in **fault** (the 400 `ConditionalCheckFailed`) — the race
+loss, visible.
+
+With the whole stack up, one purchase (`runbook-cognito-auth.md` §11 claim 5) is the last
+claim: **one trace** from `ticket-edge/dev` through `checkout-saga`'s states, the
+`http:invoke` calls into seat-inventory and checkout, the SQS hop to
+`ticket-issuance-service`, and `qr-generation` — or, if `http:invoke` does not forward the
+header, a saga trace and per-service traces that share an order id, which is recorded as
+the finding and not fixed. Either way `ticket-issuance-queue process` appears as a consumer
+span parented on the saga's `SendMessage`; that half is the code's, not Step Functions'.
+
+## Results, 2026-09-14 — steps 1–8
+
+Done by CLI from the repo, before any task definition exists to use them. Zero billable
+resources created.
+
+| Step | Resource | Check |
+|---|---|---|
+| 1 | `/ticket-waiting-room/otel-collector-config`, String, version 1 | `get-parameter` value diffs against `docs/otel-collector-config.yaml` only in the trailing newline SSM normalizes |
+| 2 | `/ecs/otel-collector`, `/ticket-waiting-room/metrics` | both retention **1 day** |
+| 3 | `ticket-telemetry-export` | attached to `seat-inventory-task-role`, `ticket-waiting-room-task-role`, `ticket-issuance-task-role`, `notification-task-role` |
+| 4 | `ticket-checkout-task-role` | trust `ecs-tasks.amazonaws.com`; only `ticket-telemetry-export` attached |
+| 5 | `ReadCollectorConfig` inline on `ticket-ecs-execution-role` | beside `ReadDatabaseSecrets` |
+
+**Step 6, by the CLI block above** — each revision derived from the previous one with
+`jq`, so every queue URL, secret and log block came across untouched (checked on checkout:
+`DB_USERNAME`/`DB_PASSWORD` still `valueFrom` secrets beside the two new plain variables):
+
+| Family | Old → new | Task role |
+|---|---|---|
+| `seat-inventory-service` | 4 → **5** | `seat-inventory-task-role` |
+| `waiting-room-service` | 3 → **4** | `ticket-waiting-room-task-role` |
+| `checkout-payment-service` | 6 → **7** | **`ticket-checkout-task-role`** — its first |
+| `ticket-issuance-service` | 4 → **5** | `ticket-issuance-task-role` |
+| `notification-service` | 2 → **3** | `notification-task-role` |
+
+Read back on all five: task `memory=1024`, app container `image=<service>:5e3c555`,
+`memory=768`, `TELEMETRY_EXPORT_ENABLED=true`, `OTLP_ENDPOINT=http://localhost:4318`,
+`dependsOn=aws-otel-collector:START`; sidecar `essential=false`, `256/128`,
+`AOT_CONFIG_CONTENT` under `secrets`, health `CMD /healthcheck`, logs
+`/ecs/otel-collector/<service>`. Tagged `project=ticket-waiting-room` — the earlier
+revisions never were, which the tag sweep had not noticed because task definitions are free.
+**These are the revision numbers the next stack-up's service creation uses.**
+
+**Step 7** — `checkout-tg` by hand in the console, the other three by the CLI block; all
+four now `/actuator/health` with matcher `200`, interval 10 s, timeout 5 s, thresholds 2/2,
+deregistration delay 30 s — only the path and the matcher changed. No ALB exists to attach
+them to yet, which is the point of doing it now: in force the moment the next one does.
+
+**Step 8** — mixed console and CLI. `ticket-edge` stage `dev`: `tracingEnabled` **true**
+(console). `checkout-saga`: tracing **enabled** at 21:29, `XRay` inline policy on
+`ticket-saga-role` beside `SagaInvoke` (CLI). Lambdas, all three **Active**:
+`hold-cleanup` through the console, which attached a generated
+`AWSLambdaTracerAccessExecutionRole-462ff057-…` customer policy (the two `xray:Put*`
+actions — same grant as the managed one, under a name only the console would choose);
+`qr-generation` and `ticket-queue-notifier` through the CLI with the AWS-managed
+`AWSXRayDaemonWriteAccess`. Functionally identical; recorded because a tag sweep will one
+day ask what that generated policy is. Nothing here bills until something runs.
+
+Policy simulation (`iam simulate-principal-policy`) on `ticket-checkout-task-role`:
+`xray:PutTraceSegments` and `xray:PutTelemetryRecords` **allowed**;
+`cloudwatch:PutMetricData` **implicitDeny**, which is the design. `ssm:GetParameters` on the
+parameter from `ticket-ecs-execution-role`: **allowed**.
+
+**The simulator cannot vouch for the logs statement.** It answers `implicitDeny` for
+`logs:PutLogEvents` on the EMF stream ARN — and gives the same answer for
+`ticket-ecs-execution-role`, whose `AmazonECSTaskExecutionRolePolicy` grants it on `*` and
+which writes every task's log stream every session. Whatever the simulator does with a
+log-group ARN containing `/`, it is not evaluating the policy as CloudWatch Logs will. The
+policy's resource matches the group's real ARN form exactly
+(`…:log-group:/ticket-waiting-room/metrics:*`, per `describe-log-groups`); the proof is
+§7 claim 3, when the first task's collector writes an EMF event or reports
+`AccessDeniedException` in `/ecs/otel-collector`. Recorded so the next person does not
+spend twenty minutes on the simulator.
 
 ## Traps Predicted
 
@@ -460,17 +628,9 @@ scheduled refresh, a `seats.remaining` gauge for `evt-o` in the namespace within
 - **Old revisions still exist and still work** — they just export nothing. A service brought
   up from the previous runbook's revision number will look healthy and be invisible.
 
-## X-Ray on the edge, the saga and the Lambdas — pending
-
-To be written after §7 has run: active tracing on the `ticket-edge` `dev` stage, tracing
-on `checkout-saga`, the active-tracing toggle on the three Lambdas, target groups moved to
-`GET /actuator/health` with a `200` matcher, and whether Step Functions' `http:invoke`
-forwards `X-Amzn-Trace-Id` (if it does not, the saga's calls are separate traces sharing an
-order id — recorded, not fixed).
-
 ## Dashboard — pending
 
-To be written after the namespace exists: queue depth and admitted per event, seats
+To be written after §9 has run and the namespace exists: queue depth and admitted per event, seats
 remaining, hold contention (`held` vs `unavailable` stacked), conversion as
 `captured / admissions` metric math, `http.server.requests` p99 per service, WAF blocked
 requests. Exported as JSON into the repo for Phase 2.

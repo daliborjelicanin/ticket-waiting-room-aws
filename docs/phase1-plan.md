@@ -282,10 +282,13 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       `TELEMETRY_EXPORT_ENABLED=true`, one `ticket-telemetry-export` policy on five task
       roles (`xray:Put*` + `logs:*` on the EMF group — metrics go as EMF log events, not
       `PutMetricData`), a first task role for checkout, `ssm:GetParameters` on the execution
-      role, task memory 1 GB. Images at `4262e76` are in ECR (2026-09-14) but predate the
-      `service` metric tag — rebuild once more; X-Ray tracing on the `ticket-edge` stage and the saga; target
-      groups re-pointed at `GET /actuator/health` with a `200` matcher; read the warm-up's
-      "fetched in N ms" line and the first token's latency against slice 6's 12.8 s
+      role, task memory 1 GB. **Done except for running it (2026-09-14):** images at
+      `5e3c555` in ECR; parameter, log groups, policy, checkout role, execution-role grant;
+      five revisions registered (`seat-inventory:5`, `waiting-room:4`, `checkout:7`,
+      `issuance:5`, `notification:3`); all four target groups on `GET /actuator/health`
+      matcher `200`; X-Ray on the `ticket-edge` stage, `checkout-saga` and all three
+      Lambdas. Left: the stack-up itself — runbook §9's claims, the warm-up's "fetched in
+      N ms" against slice 6's 12.8 s, and whether `http:invoke` forwards the trace header
 - [ ] CloudWatch dashboard: queue depth, seats remaining, hold contention, conversion
 - [ ] X-Ray tracing across APIGW → ECS → Step Functions → Lambda
 - [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;
