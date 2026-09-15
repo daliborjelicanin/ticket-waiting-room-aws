@@ -26,6 +26,11 @@ dependencies {
     runtimeOnly(libs.opentelemetry.exporter.sender.jdk)
     implementation(libs.opentelemetry.aws.xray.propagator)
     implementation(libs.opentelemetry.aws.sdk)
+    // For ServerRequestObservationContext in the housekeeping predicate. Every service
+    // already has spring-web through starter-web; declared here because a predicate that
+    // failed with NoClassDefFoundError on its first request would be a silent one.
+    implementation("org.springframework:spring-web")
+    compileOnly("jakarta.servlet:jakarta.servlet-api")   // getCarrier() returns HttpServletRequest; the servlet API is Tomcat's at runtime
 
     // The AWS SDK is compileOnly for the same reason it is in :common. Two of the beans
     // here only make sense to a service that has an SDK client, and such a service

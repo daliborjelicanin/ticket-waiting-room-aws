@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,7 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "management.otlp.metrics.export.step=1s",
                 "management.metrics.enable.all=false",
                 "management.metrics.enable.probe=true",
-                "management.metrics.tags.service=probe-service"
+                "management.metrics.enable.http.server.requests=true",
+                "management.metrics.tags.service=probe-service",
+                "management.metrics.distribution.slo.http.server.requests=10ms,100ms,1s"
         })
 @Testcontainers
 class OtlpExportIT {
@@ -81,6 +85,33 @@ class OtlpExportIT {
     }
 
     @Test
+    void healthProbesAndScheduledTasksAreNeitherTracedNorTimed() {
+        RestClient client = RestClient.create("http://localhost:" + port);
+        client.get().uri("/actuator/health").retrieve().toBodilessEntity();
+        client.get().uri("/probe").retrieve().toBodilessEntity();
+
+        // The probe request's span is the marker that the export step ran; the health span
+        // and the scheduled task's span must not be beside it, and the health request must
+        // not be in the request timer either.
+        String logs = collectorLogsUntil("Name           : http get /probe");
+        assertThat(logs).doesNotContain("http get /actuator/health");
+        assertThat(logs).doesNotContain("Name           : task ");
+        assertThat(logs).doesNotContain("uri: Str(/actuator/health)");
+    }
+
+    @Test
+    void theRequestTimerLeavesAsAHistogramSoPercentilesExistDownstream() {
+        RestClient.create("http://localhost:" + port).get().uri("/probe").retrieve().toBodilessEntity();
+
+        String logs = collectorLogsUntil("Name: http.server.requests");
+        int at = logs.indexOf("Name: http.server.requests");
+        String descriptor = logs.substring(at, Math.min(logs.length(), at + 2000));
+        // An explicit-bucket histogram with the SLO boundaries, not a plain sum/count pair.
+        assertThat(descriptor).contains("DataType: Histogram");
+        assertThat(descriptor).containsPattern("ExplicitBounds #0: 10");
+    }
+
+    @Test
     void onlyEnabledMetricsLeaveAndTheirTagsTravelWithThem() {
         String logs = collectorLogsUntil("Name: probe.hits");
 
@@ -110,7 +141,13 @@ class OtlpExportIT {
     }
 
     @SpringBootApplication
+    @EnableScheduling
     static class App {
+
+        /** Runs constantly so its absence from the export is a real absence. */
+        @Scheduled(fixedRate = 200)
+        void housekeeping() {
+        }
 
         @RestController
         static class Probe {

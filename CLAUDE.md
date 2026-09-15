@@ -111,6 +111,14 @@ alters its behaviour, and mark not-yet-built boxes as such.
   hand. See `docs/runbook-hold-cleanup.md`, `docs/runbook-qr-generation.md` and
   `docs/runbook-websocket-queue.md`.
 
+### Load test
+
+`load-test/` holds the slice-7 proof: two k6 scenarios (`k6/seat-race.js`,
+`k6/purchase-race.js`) that race real buyers for the same seats through the edge, and the
+scripts that create Cognito test users, mint their tokens, and check the data stores
+afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs from the
+`grafana/k6` image; see `load-test/README.md`. Tokens and results are gitignored.
+
 ### Build Commands
 
 - `./gradlew build` — build and test all modules

@@ -1,5 +1,6 @@
 package com.ticketwaitingroom.observability;
 
+import io.micrometer.observation.ObservationPredicate;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.contrib.awsxray.propagator.AwsXrayPropagator;
@@ -13,6 +14,7 @@ import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.S
 import org.springframework.boot.opentelemetry.autoconfigure.OpenTelemetrySdkAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.server.observation.ServerRequestObservationContext;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.interceptor.ExecutionInterceptor;
 import software.amazon.awssdk.services.sqs.model.Message;
@@ -40,6 +42,8 @@ import software.amazon.awssdk.services.sqs.model.Message;
  *
  * <p>The SDK-facing beans are conditional on the SDK being on the classpath: a service with
  * no AWS client (checkout-payment) gets the first two points and nothing it cannot use.
+ *
+ * <p>One thing is deliberately <em>not</em> observed — see {@link #noHousekeepingObservations()}.
  */
 @AutoConfiguration(after = {OpenTelemetrySdkAutoConfiguration.class, OpenTelemetryTracingAutoConfiguration.class})
 public class TicketingObservabilityAutoConfiguration {
@@ -52,6 +56,30 @@ public class TicketingObservabilityAutoConfiguration {
     @Bean
     TextMapPropagator awsXrayPropagator() {
         return AwsXrayPropagator.getInstance();
+    }
+
+    /**
+     * Housekeeping is not traffic. Two things Boot observes by default were, on the first
+     * full-stack run, most of what X-Ray and the request timer contained: the ALB's health
+     * probe (two nodes, every 10 s, per service — around two-thirds of all requests) and
+     * the {@code @Scheduled} gauge refreshes (a trace every 30 s per service). Neither says
+     * anything about a customer, both dilute every percentile, and both are billed per
+     * trace. Dropping the observation drops the span <em>and</em> the meter series, so
+     * {@code /actuator/**} never appears in {@code http.server.requests} either — the ALB
+     * reads the status code and needs nothing else.
+     */
+    @Bean
+    ObservationPredicate noHousekeepingObservations() {
+        return (name, context) -> {
+            if (name.startsWith("tasks.scheduled.execution")) {
+                return false;
+            }
+            if (context instanceof ServerRequestObservationContext request) {
+                String uri = request.getCarrier().getRequestURI();
+                return uri == null || !uri.startsWith("/actuator");
+            }
+            return true;
+        };
     }
 
     @Configuration(proxyBeanMethods = false)

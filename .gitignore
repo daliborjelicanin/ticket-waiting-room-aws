@@ -11,3 +11,8 @@ out/
 
 # OS
 .DS_Store
+
+# Load test: minted tokens and run results
+load-test/.tokens.json
+load-test/results/*
+!load-test/results/.gitkeep

@@ -6,8 +6,8 @@ request. A Spring Boot starter in the Boot sense, like `security-starter`: a dep
 add, and an auto-configuration that arrives with it.
 
 System context: [`docs/architecture.md`](../docs/architecture.md) ·
-AWS setup: slice 7 runbook (pending — the collector sidecar, task-role permissions and the
-dashboard are the AWS half of this module)
+AWS setup: [`docs/runbook-observability.md`](../docs/runbook-observability.md) — the
+collector sidecar, task-role permissions, the dashboard, and what the first runs found
 
 ## Why a module and not five copies
 
@@ -37,8 +37,8 @@ flowchart LR
         SVC -->|"OTLP/HTTP<br/>traces every 5s · metrics every 1m"| COL
     end
     COL -->|"awsxray"| XR["X-Ray"]
-    COL -->|"awsemf"| CW["CloudWatch metrics"]
-    TR["ECS task role<br/>xray:PutTraceSegments<br/>cloudwatch:PutMetricData · logs:*"] -.- COL
+    COL -->|"awsemf → EMF log events"| CW["CloudWatch metrics<br/>namespace TicketWaitingRoom"]
+    TR["ECS task role<br/>xray:PutTraceSegments<br/>logs:PutLogEvents on the EMF group"] -.- COL
 ```
 
 One switch, `TELEMETRY_EXPORT_ENABLED`, turns both exporters on; off is the local default,
@@ -104,13 +104,35 @@ the load test will ask:
 Conversion rate is `checkout.charges{captured}` over `waiting_room.admissions`, computed
 on the dashboard, not in code.
 
+## What is deliberately not observed
+
+Two things Boot observes by default were, on the first full-stack run, most of what X-Ray
+and the request timer contained: the ALB's health probe (two nodes, every 10 s, per
+service — about two-thirds of all requests) and the `@Scheduled` gauge refreshes (a trace
+every 30 s per service). `noHousekeepingObservations` is one `ObservationPredicate` bean
+that drops both: anything named `tasks.scheduled.execution…`, and any server request whose
+URI starts with `/actuator`. Dropping the observation drops the span *and* the meter
+series, so `/actuator/health` is neither traced nor in `http.server.requests` — the ALB
+reads the status code and needs nothing else. Proven in `OtlpExportIT`: a health request
+and a running scheduled task leave nothing at the collector while the probe request beside
+them does.
+
+## Timers leave as histograms
+
+Each service sets SLO bucket boundaries for `http.server.requests` (and checkout for
+`checkout.gateway.latency`): ten fixed buckets from 10 ms to 10 s. The OTLP registry then
+exports an explicit-bucket histogram rather than a count/sum pair, the collector's EMF
+exporter carries the buckets through, and CloudWatch can answer p50/p95/p99 — which the
+first session's dashboard could not, having only avg and max. Ten buckets rather than
+Micrometer's ~70-bucket percentile histogram, because every bucket is a value in every EMF
+event and the load test's percentiles do not need finer than this.
+
 ## The health door
 
 `GET /actuator/health` answers `{"status":"UP"}` anonymously; `security-starter` opens
-that one path (GET only, status word only). The ALB target groups should probe it with a
-`200` matcher instead of the `GET /` → `200-499` matcher slice 6 settled for — that matcher
-accepted the 401 as "alive", which proved Tomcat was up and nothing more. Runbook change
-for the next AWS session.
+that one path (GET only, status word only). All four ALB target groups probe it with a
+`200` matcher since 2026-09-14, replacing slice 6's `GET /` → `200-499` matcher, which
+accepted a 401 as "alive" and so proved that Tomcat was up and nothing more.
 
 ## Proven
 

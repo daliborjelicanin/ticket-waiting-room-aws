@@ -81,6 +81,13 @@ management:
         url: ${OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
         step: PT1M
   metrics:
+    distribution:
+      slo:
+        # Bucket boundaries for the timers, so they leave as histograms and CloudWatch can
+        # answer p50/p95/p99 rather than only avg/max. Ten fixed buckets rather than
+        # Micrometer's percentile histogram (~70 per timer): every bucket is a value in the
+        # EMF event, and the load test's percentiles do not need finer than this.
+        http.server.requests: 10ms,25ms,50ms,100ms,250ms,500ms,1s,2500ms,5s,10s
     tags:
       # Every data point carries the service name as an attribute, which the collector's
       # EMF exporter turns into a CloudWatch dimension. Without it five services' copies of

@@ -314,6 +314,13 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       on its role — the header still propagates through it (2026-09-15)
 - [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;
       capture "0 double-sold seats" numbers + latency percentiles
+      — **code half done (2026-09-15):** timers export as ten-bucket histograms so CloudWatch
+      has real p99s; health probes and scheduled tasks are no longer observed (they were
+      two-thirds of the traces); `load-test/` holds scenario A (seat race, S×201 + rest 409)
+      and scenario B (M customers with their own identities race `/purchase` for S seats —
+      S sagas succeed, the rest fail at `HoldSeat`), the user/token scripts and the
+      invariant check. Both scenarios pass `k6 inspect` in the official image; the session
+      itself is next (images to rebuild first — the histogram/predicate change is code)
 - **Learn:** custom metrics, X-Ray, load testing — this produces the README's money chart
 .
 ### 8. Wrap-up
