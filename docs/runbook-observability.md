@@ -605,6 +605,124 @@ policy's resource matches the group's real ARN form exactly
 `AccessDeniedException` in `/ecs/otel-collector`. Recorded so the next person does not
 spend twenty minutes on the simulator.
 
+## Results, 2026-09-14 — §9 with seat-inventory alone
+
+`seat-inventory-service:5` on FARGATE_SPOT, 0.25 vCPU / 1 GB, public IP, no ALB, from
+19:45 UTC. Both containers `RUNNING`, the sidecar **HEALTHY** within the first minute —
+so the `valueFrom` on `AOT_CONFIG_CONTENT` and the execution role's `ssm:GetParameters`
+work. Every numbered claim from §9, as it came out:
+
+| # | Claim | Result |
+|---|---|---|
+| 1 | Collector ready | `Everything is ready. Begin running and processing data.` at 19:45:43; no `error`/`AccessDenied` at any point — the logs statement the IAM simulator would not evaluate works |
+| 2 | Service up, warmed, exporting | `Started … in 45.7 s` (0.25 vCPU); **`JWT decoder warm: issuer metadata and keys fetched in 5802 ms`** (6311 ms on the second task). First authenticated request after that: **4.3 s** (3.8 s on the second task) against slice 6's 12.8 s — the JWKS half of the cost is now paid before the port opens, the rest is the JIT meeting the security filter chain and Jackson. Health from outside: `200 {"status":"UP"}` |
+| 3 | EMF arriving | first stream in `/ticket-waiting-room/metrics` ~75 s after start; events carry `"Namespace":"TicketWaitingRoom"` and `"Dimensions":[["service", …]]` |
+| 4 | Namespace with our dimensions | `http.server.requests{error,exception,method,outcome,service,status,uri}`, `seat.hold.attempts{outcome,service}`, `seat.hold.releases{outcome,service}`, `seat.purchase.confirmations{outcome,service}`, `seats.remaining{event,service}` — the `service` tag became a dimension exactly as intended |
+| 6 | The race, in X-Ray | **30 concurrent holds on one seat → 1×201, 29×409**, 30 traces. A loser's tree: `seat-inventory-service` → `security filterchain before` (`authenticate bearertoken` 108 ms, `authorize request` 197 ms) → `secured request` → **`DynamoDB UpdateItem fault=true`** 409 ms. The conditional-write loss is a faulted subsegment under the request that lost. CloudWatch `Sum` of `seat.hold.attempts{unavailable}` over the window: **29** |
+
+Claim 5 (target healthy on `/actuator/health`) waits for the ALB.
+
+**Two defects found by claim 4, both fixed in the same session:**
+
+- **`seat-inventory-task-role` had no `dynamodb:Query`.** The slice-1 policy was
+  `GetItem`/`PutItem`/`UpdateItem` on the table, and the new `countAvailable` is a Query.
+  The gauge did what its javadoc promises — `WARN could not count remaining seats … keeping
+  the last reading`, with the trace id on the log line, and nothing else affected — which is
+  the first time the least-privilege role has refused the service something and the first
+  time the graceful path ran outside a test. Fixed by adding `dynamodb:Query` to the inline
+  `Policy` (same table ARN); the next refresh succeeded with no restart, and
+  `seats.remaining{evt-p}` read **3** (4 seeded, 1 held, 1 released back). Update the
+  seat-inventory runbook's policy table.
+- **The EMF exporter swallowed the race.** Micrometer exports cumulative counters; `awsemf`
+  converts them to per-step deltas and, by default, uses the first observation as a
+  baseline and emits nothing for it. A 20-way race whose increments all land in one step
+  therefore exported as `seat.hold.attempts = 0` forever after. Fixed with
+  `retain_initial_value_of_delta_metric: true` in the collector config — SSM parameter
+  **version 2**, `docs/otel-collector-config.yaml` updated — and a forced redeployment to
+  make the sidecar reread it (rollout 6.5 min on Spot; the old task drained cleanly). The
+  first step after the fix carried `held 2 / unavailable 29 / released 1 / not_found 1`.
+
+**Observations, not defects:**
+
+- The `@Scheduled` gauge refresh gets its own trace every 30 s
+  (`task seatInventoryMetrics.refreshRemaining`, 14 of the first 41 traces). Boot observes
+  scheduled tasks by default; switch that observation off in code so X-Ray shows requests,
+  not housekeeping. Follow-up for the next code change.
+- X-Ray segments carry the URL but not the HTTP status (`Http.HttpStatus` empty in
+  summaries, no `http.response` on the segment). The OTLP span has it; the exporter's
+  attribute mapping evidently does not pick up the name Boot's server observation uses.
+  Cosmetic for now — the fault flag on the DynamoDB subsegment is what carries the story.
+- At first export the JVM prints `sun.misc.Unsafe::arrayBaseOffset has been called by
+  com.google.protobuf.UnsafeUtil` — protobuf-java 4.34 under JDK 26, from the OTLP
+  exporter. Harmless until a JDK removes the method; nothing to do here.
+- The sidecar logs a deprecation notice about `DimensionRollupOption`'s future default.
+  Ours is set explicitly; ignore.
+
+Cost of the session so far: one Spot task with 1 GB for ~45 minutes, ≈ $0.01.
+
+## Results, 2026-09-15 — §9 with the whole stack
+
+Stack-up by CLI from the runbooks, 17:12–17:32 UTC: RDS, ElastiCache and the ALB started in
+parallel (all three available in ~3 min — RDS `db.t4g.micro` is far quicker than the 6–10
+min the slice-4 runbook allowed for), EventBridge connection recreated and the saga
+redefined with its ARN (tracing kept on), listener + five header-guarded rules, `albDns`
+stage variable, `ticketing` database, **two more revisions** (`checkout:8`, `issuance:6`)
+because the RDS-managed secret ARN is minted fresh each cycle, then five services. Bring-up
+of a service behind the ALB to *healthy*: ~2 min; boot times on 0.25 vCPU 47–84 s.
+
+| # | Claim | Result |
+|---|---|---|
+| 1–2 | Five collectors ready, five warm-ups | `Everything is ready` ×5; warm-up `fetched in` **2694 / 4199 / 4922 / 13602 ms** (checkout, issuance, seat-inventory, waiting-room — the last on an 80 s boot); no `Failed to export` anywhere |
+| 5 | Targets healthy on `/actuator/health` | all four `healthy` with the `200` matcher, within the 120 s grace |
+| 6 | The race through the edge | **30 concurrent holds via APIGW → ALB → Fargate → DynamoDB → 1×201, 29×409**; seed 3.7 s (first authenticated request), a hold 0.39 s; `seat.hold.attempts{unavailable}` Sum **30** for the window (1 + 29) |
+| 7 | **One purchase, one trace** | saga `SUCCEEDED` in ~5 s; order `PAID` under bob's `sub`; one ticket; seat `SOLD`, TTL removed; QR rendered. The execution's `traceHeader` is API Gateway's `Root=1-6aa97f3f-…`, and **X-Ray holds the purchase as one trace of 18 segments**: `ticket-edge/dev` → (StartExecution) → for each `http:invoke` a *second* `ticket-edge/dev` segment → `seat-inventory-service` / `checkout-payment-service` with the security filter chain and the `DynamoDB UpdateItem` subsegments → `SQS SendMessage` → **`ticket-issuance-queue process`** (the consumer span, parented on the saga's send) → its own `SendMessage` to the QR queue → and, via SNS with raw delivery, **`purchase-confirmed-notifications process`** ×3 with `SesV2 SendEmail fault=true` |
+
+**`http:invoke` forwards `X-Amzn-Trace-Id`.** That was the open question and the answer is
+yes: every call the saga makes re-enters the stage carrying the purchase's root, and the
+service joins it. The trace's own shape says so — four `ticket-edge/dev` segments inside one
+trace, one per saga call, each with the ALB URL as its downstream.
+
+**Every counter in the namespace matched the traffic**: `seat.hold.attempts{held}` 3
+(T-1, the saga's T-2, the T-3 winner) / `{unavailable}` 30, `seat.purchase.confirmations`
+1, `waiting_room.joins{WAITING}` 1, `waiting_room.admissions` 1, `checkout.orders{created}`
+1, `checkout.charges{captured}` 1, `tickets.issued{issued}` 1,
+`notifications.sent{failed}` 3.
+
+**Found, not defects:**
+
+- **The three failed sends are the SES sandbox.** The purchase ran as `bob@example.test`
+  (a pure test identity — "alice" turned out to be the owner's real mailbox, left alone),
+  and the sandbox refuses unverified recipients: `MessageRejectedException: Email address
+  is not verified`. Three receives, then the DLQ, purged at teardown. The redeliveries each
+  opened a consumer span under the *same* trace, which is why the trace grew from 16 to 18
+  segments and to 128 s: at-least-once delivery, drawn.
+- **Step Functions emitted no segments of its own.** `tracingConfiguration.enabled` true,
+  the four `xray:*` actions on `ticket-saga-role`, the execution carrying a sampled header —
+  and no `checkout-saga` node in the service graph ten minutes later, only the
+  `STEPFUNCTIONS` placeholder from API Gateway's `StartExecution`. Propagation *through* the
+  saga works regardless (above). Open item for the next session: confirm whether Standard
+  workflows need something beyond the toggle here, or whether the segments were simply late.
+- **The QR Lambda is a separate trace, linked.** `qr-generation` ran (init 1529 ms, 1433 ms)
+  under its own `TraceId 1-6aa97f47-…`: Lambda *links* an SQS-triggered invocation to the
+  message's trace rather than parenting on it. Expected, and the Lambda node still shows in
+  the service graph.
+- **Health checks and housekeeping dominate the trace count.** Two ALB nodes probing every
+  10 s at 100 % sampling produced ~200 traces per service in 20 minutes, plus a trace per
+  30 s gauge refresh (`task seatInventoryMetrics.refreshRemaining`,
+  `task waitingRoomMetrics.refreshDepths`). Both to switch off in code — an observation
+  predicate excluding `/actuator/**`, and the scheduled-task observation — before the load
+  test, where they would be noise in the p99 too.
+- **`alice`'s runbook password was not the real one** (the console user was created with a
+  different value on the day); `bob`'s was reset to the runbook's with
+  `admin-set-user-password`, the command the runbook itself uses.
+
+**Teardown 17:32–17:36 UTC**: five services (`--force`), the ALB, RDS
+(`--skip-final-snapshot --delete-automated-backups`), ElastiCache, the EventBridge
+connection and its managed secret, DLQ purged; sweep afterwards 0 across the board;
+superseded images (`4262e76`, `fd39c8b`) deleted from ECR so each repository holds
+`5e3c555` only. Stack up ~20 minutes: ALB $0.013, RDS $0.006, cache $0.006, five Spot tasks
+with 1 GB ≈ $0.02, X-Ray/Logs pennies — **≈ $0.05 for the session**.
+
 ## Traps Predicted
 
 - **`ValueFrom` lands under `secrets`, and the execution role is the one that needs the
@@ -628,14 +746,152 @@ spend twenty minutes on the simulator.
 - **Old revisions still exist and still work** — they just export nothing. A service brought
   up from the previous runbook's revision number will look healthy and be invisible.
 
-## Dashboard — pending
+## Session B — the dashboard
 
-To be written after §9 has run and the namespace exists: queue depth and admitted per event, seats
-remaining, hold contention (`held` vs `unavailable` stacked), conversion as
-`captured / admissions` metric math, `http.server.requests` p99 per service, WAF blocked
-requests. Exported as JSON into the repo for Phase 2.
+Laptop-only: **nothing needs to be running.** A CloudWatch dashboard is built against
+metric names and dimensions, and the `TicketWaitingRoom` namespace has every meter from
+the 2026-09-15 session with `service`, `outcome`, `event` and `uri` as dimensions.
+CloudWatch keeps the data — 1-minute resolution for 15 days, the metric definitions listable
+for two weeks — so the time picker on **2026-09-15 17:10–17:40 UTC** shows real numbers:
+the 30-way race, the purchase, the queue going 1 → 0, the three refused mails. The WAF
+metrics from 2026-09-13 are there too. Fresh data comes with the load test, which is the
+session that produces the README's chart; this one produces the board it is read from.
+Cost: **$0** — the first three dashboards in an account are free, and this is the first.
+
+### What each widget answers, and why it is shaped that way
+
+Read the facts of the namespace first (`aws cloudwatch list-metrics --namespace
+TicketWaitingRoom`), because they dictate the widgets:
+
+- **Counters are per-minute deltas, not running totals.** The EMF exporter converts
+  Micrometer's cumulative counters (`retain_initial_value_of_delta_metric: true`, §1).
+  So every counter widget uses `Sum`; `Maximum` on a counter is meaningless here.
+- **Gauges are gauges.** `waiting_room.queue.depth`, `waiting_room.admitted`,
+  `seats.remaining` — `Maximum`/`Minimum` over the minute.
+- **A timer arrives as two metrics.** `http.server.requests` carries a statistic set per
+  step — `Count` and `Sum` are real, but `Min`/`Max` inside it are **0** (Micrometer's OTLP
+  histogram → EMF loses them) — and `http.server.requests.max` is a separate gauge. So the
+  honest latency widget is *average* (`SUM(Sum)/SUM(SampleCount)`) plus the `.max` gauge.
+  **There is no p99 yet**, and the console cannot compute one from what is exported. A
+  percentile needs the exporter to send bucketed histograms
+  (`management.otlp.metrics.export.histogram-flavor` + `percentiles-histogram` for the
+  request timer), which the EMF exporter turns into a `Values`/`Counts` distribution that
+  CloudWatch *can* take `p99` of. That is a code change for the load-test session, where
+  p99 is the point; this dashboard's latency widget is built so that swapping `avg` for
+  `p99` is one word once the histograms flow.
+- **Every dimension must be named.** A CloudWatch series is keyed by its full dimension
+  set, so `http.server.requests` with seven dimensions cannot be charted "per service" by
+  naming `service` alone. `SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName="…" uri="…"', 'Sum', 60)`
+  is the idiom: the schema in braces is the exact dimension set, then filters, then the
+  statistic; `SUM(...)`/`MAX(...)` over the search collapses the rest.
+- **Health probes are two-thirds of the requests.** Two ALB nodes every 10 s, per service.
+  The latency widget therefore searches by endpoint (`uri="/events/{eventId}/seats/{seatId}/hold"`
+  and so on) rather than by service; there is no `!=` in SEARCH.
+- **AWS-side cross-checks beside our numbers.** `AWS/DynamoDB ConditionalCheckFailedRequests`
+  on the table is the contention seen from DynamoDB's side and should track
+  `seat.hold.attempts{unavailable}` one-for-one — the first time the project's own metric is
+  checked against the platform's. `AWS/States` for the saga, `AWS/SQS` depth on the four
+  DLQs ("must stay at zero"), `AWS/WAFV2` per rule.
+
+The board (`docs/dashboard-ticket-waiting-room.json`, 12 widgets, 24 columns):
+
+| Row | Widget | Metrics | Stat |
+|---|---|---|---|
+| 0 | header text | what the numbers mean, one paragraph | — |
+| 1 | Queue depth + admitted per event | `waiting_room.queue.depth`, `waiting_room.admitted` via SEARCH on `{event,service}` | Maximum |
+| 1 | Seats remaining per event | `seats.remaining` | Minimum |
+| 2 | **Hold contention** (stacked) | `seat.hold.attempts{held}` green, `{unavailable}` red; right axis `AWS/DynamoDB ConditionalCheckFailedRequests` | Sum |
+| 2 | Seat transitions | confirmations `confirmed`/`not_found`, releases `released`/`not_found` | Sum |
+| 3 | **Conversion** (number) | `IF(admissions > 0, 100 * captured / admissions, 0)` over the last hour | metric math |
+| 3 | Purchase funnel (numbers + sparklines) | joins, admissions, orders, captured, declined, tickets, duplicate deliveries, mails sent/failed | Sum |
+| 4 | Charge outcomes (stacked) | `checkout.charges` by `outcome` via SEARCH | Sum |
+| 4 | Latency per endpoint | avg for hold / charge / queue join from `Sum`/`SampleCount`; `http.server.requests.max` for hold | math |
+| 5 | Saga executions | `AWS/States` succeeded, failed, `ExecutionTime` p90 | Sum / p90 |
+| 5 | DLQs | `ApproximateNumberOfMessagesVisible` on the four DLQs | Maximum |
+| 5 | WAF | `AllowedRequests` ALL, `BlockedRequests` per rule | Sum |
+
+### Console steps (CloudWatch → Dashboards)
+
+**1. Create the shell.** CloudWatch → left nav **Dashboards** → **Create dashboard** →
+name `ticket-waiting-room` → **Create dashboard**. The *Add widget* dialog opens; **close
+it** — the widgets come from the JSON.
+
+**2. Paste the source.** On the empty dashboard: **Actions ▾ → View/edit source**. Replace
+the `{"widgets": []}` in the editor with the full contents of
+`docs/dashboard-ticket-waiting-room.json` → **Update** → **Save dashboard** (top right; the
+dashboard is *not* saved until this is clicked, and navigating away discards it).
+
+**3. Point the time picker at the data.** Top right: **Custom → Absolute** → 2026-09-15
+17:10 to 17:40 **UTC** (the picker defaults to local time; the session was 19:12–19:36 CEST).
+Every widget fills. What to see, widget by widget:
+
+| Widget | Expected on 2026-09-15 |
+|---|---|
+| Queue depth | `evt-t` rises to 1 at 17:24, falls to 0 on the admit; `admitted` 1 |
+| Seats remaining | `evt-t`: 3 → 2 (T-1 held) → 1 (T-2 sold) → 0 (T-3 held) |
+| Hold contention | one minute with `held` 1 / `unavailable` 29 at 17:28, and DynamoDB's `ConditionalCheckFailedRequests` **29** in the same minute |
+| Conversion | **100 %** (1 captured / 1 admission) |
+| Funnel | 1 / 1 / 1 / 1 / 0 / 1 / 0 / 0 / 3 |
+| Charge outcomes | one `captured` |
+| Latency | hold avg ≈ 16–40 ms, max ≈ 400 ms (the losers' 409s); charge avg ≈ 700 ms |
+| Saga | 1 succeeded, ~5 s |
+| DLQs | notifications-dlq 0 → 1 at ~17:31 (purged at teardown) |
+| WAF | empty in this window — switch to 2026-09-13 for the 983-block minute |
+
+If a widget is empty with the picker right, open it (**⋮ → Edit**) and read the error
+banner: a SEARCH with a wrong dimension set says `No metrics found`, which is the schema
+in braces not matching `list-metrics` exactly.
+
+**4. Read one number against the other.** The contention widget's right axis is the
+check: DynamoDB counted 29 `ConditionalCheckFailedRequests` in the minute the service
+counted 29 `unavailable`. Two independent sources, one number. Screenshot it for the README.
+
+**5. Export it back to the repo** — the console is a place to look, the JSON in git is
+the source of truth and Phase 2's `aws_cloudwatch_dashboard`:
+
+```bash
+aws cloudwatch get-dashboard --region eu-central-1 --dashboard-name ticket-waiting-room \
+  --query DashboardBody --output text | python3 -m json.tool > docs/dashboard-ticket-waiting-room.json
+git diff --stat docs/dashboard-ticket-waiting-room.json    # layout tweaks made in the console come back here
+```
+
+**CLI equivalent of steps 1–2:**
+
+```bash
+aws cloudwatch put-dashboard --region eu-central-1 --dashboard-name ticket-waiting-room \
+  --dashboard-body file://docs/dashboard-ticket-waiting-room.json
+# an empty DashboardValidationMessages list is the success signal; anything else names the widget
+```
+
+### Results, 2026-09-15
+
+Built by hand in the console from the JSON above; the first attempt viewed correctly and
+saved as `{"widgets":[]}` — the *Update*-without-*Save dashboard* trap step 2 warns about,
+caught by `get-dashboard` showing a 241-byte body. Second attempt saved: **12 widgets,
+10 160 bytes, byte-identical to `docs/dashboard-ticket-waiting-room.json`**, so the repo file
+is the source of truth without an export step. Read against 17:10–17:40 UTC with nothing
+running; the contention widget shows the 29 `unavailable` and DynamoDB's 29
+`ConditionalCheckFailedRequests` in the same minute. The account's first dashboard: $0.
+
+### Follow-ups this session surfaces for the code
+
+- **Percentiles**: export the request timer as a histogram so `p99` exists in CloudWatch
+  (see the timer note above). Same change makes `checkout.gateway.latency` p99-able.
+- **Health-probe and scheduled-task traces** (from the 2026-09-15 results): an observation
+  predicate excluding `/actuator/**` and switching off scheduled-task observation, so X-Ray
+  and `http.server.requests` carry requests, not housekeeping. Without this the load test's
+  p99 is diluted by ~12 probes a minute per service.
+- Both ride along with the k6 work; neither needs an AWS session to verify.
 
 ## Teardown
+
+**Done 2026-09-14 ~20:30 UTC** after the seat-inventory-only run: desired count 0, service
+deleted with `--force`, cluster at 0 tasks within seconds. Sweep afterwards: no ALB, RDS,
+ElastiCache, WAF or NAT; `hold-seat-schedule` disabled; 0 services. ECS tasks for the
+session ≈ 45 min on Spot ≈ $0.01, plus a few cents of X-Ray and Logs ingestion. What was
+left standing is what this runbook created on purpose, all $0: the parameter (v2), the
+two log groups with 1-day retention, the policy, the checkout role, the five revisions,
+the target-group and tracing settings.
 
 Nothing in this runbook bills while idle. Task definition revisions, the managed policy,
 the checkout task role, the SSM parameter and the two log groups all stay; the log groups

@@ -24,6 +24,10 @@ exporters:
     log_group_name: /ticket-waiting-room/metrics
     log_stream_name: otel-collector
     dimension_rollup_option: NoDimensionRollup
+    # Cumulative counters (Micrometer's default) are converted to per-step deltas here, and
+    # by default the first observation is swallowed as the baseline -- a 20-way race whose
+    # increments all land in one step then exports as 0. Keep that first value.
+    retain_initial_value_of_delta_metric: true
 
 service:
   extensions: [health_check]

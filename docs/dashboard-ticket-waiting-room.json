@@ -1,0 +1,166 @@
+{
+  "widgets": [
+    {
+      "type": "text", "x": 0, "y": 0, "width": 24, "height": 2,
+      "properties": {
+        "markdown": "## ticket-waiting-room — slice 7 dashboard\nMetrics arrive as EMF events from the ADOT sidecar (`TicketWaitingRoom`, dimension `service` on every series). Counters are **per-minute deltas**, so read them with `Sum`; gauges with `Maximum`/`Minimum`. AWS-side cross-checks (DynamoDB conditional-check failures, saga executions, DLQ depth, WAF) sit beside our own numbers. Source: `docs/runbook-observability.md`."
+      }
+    },
+
+    {
+      "type": "metric", "x": 0, "y": 2, "width": 12, "height": 7,
+      "properties": {
+        "title": "Waiting room — queue depth and admitted, per event",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60,
+        "metrics": [
+          [ { "expression": "SEARCH('{TicketWaitingRoom,event,service} MetricName=\"waiting_room.queue.depth\"', 'Maximum', 60)", "id": "depth", "label": "waiting [event]" } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,event,service} MetricName=\"waiting_room.admitted\"', 'Maximum', 60)", "id": "admitted", "label": "admitted [event]" } ]
+        ],
+        "yAxis": { "left": { "min": 0, "label": "people" } }
+      }
+    },
+    {
+      "type": "metric", "x": 12, "y": 2, "width": 12, "height": 7,
+      "properties": {
+        "title": "Seats remaining, per event",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60,
+        "metrics": [
+          [ { "expression": "SEARCH('{TicketWaitingRoom,event,service} MetricName=\"seats.remaining\"', 'Minimum', 60)", "id": "remaining", "label": "[event]" } ]
+        ],
+        "yAxis": { "left": { "min": 0, "label": "seats" } }
+      }
+    },
+
+    {
+      "type": "metric", "x": 0, "y": 9, "width": 12, "height": 7,
+      "properties": {
+        "title": "Hold contention — the conditional write, both sides of it",
+        "view": "timeSeries", "stacked": true, "region": "eu-central-1", "period": 60, "stat": "Sum",
+        "metrics": [
+          [ "TicketWaitingRoom", "seat.hold.attempts", "service", "seat-inventory-service", "outcome", "held",        { "label": "held (won)",         "color": "#2ca02c" } ],
+          [ "TicketWaitingRoom", "seat.hold.attempts", "service", "seat-inventory-service", "outcome", "unavailable", { "label": "unavailable (lost)", "color": "#d62728" } ],
+          [ "AWS/DynamoDB", "ConditionalCheckFailedRequests", "TableName", "seat-inventory", { "label": "DynamoDB: ConditionalCheckFailed", "color": "#7f7f7f", "stat": "Sum", "yAxis": "right" } ]
+        ],
+        "yAxis": { "left": { "min": 0, "label": "attempts / min" }, "right": { "min": 0, "label": "DynamoDB" } }
+      }
+    },
+    {
+      "type": "metric", "x": 12, "y": 9, "width": 12, "height": 7,
+      "properties": {
+        "title": "Seat transitions",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60, "stat": "Sum",
+        "metrics": [
+          [ "TicketWaitingRoom", "seat.purchase.confirmations", "service", "seat-inventory-service", "outcome", "confirmed", { "label": "sold" } ],
+          [ "TicketWaitingRoom", "seat.hold.releases",          "service", "seat-inventory-service", "outcome", "released",  { "label": "released (compensation)" } ],
+          [ "TicketWaitingRoom", "seat.hold.releases",          "service", "seat-inventory-service", "outcome", "not_found", { "label": "release refused (stale hold)" } ],
+          [ "TicketWaitingRoom", "seat.purchase.confirmations", "service", "seat-inventory-service", "outcome", "not_found", { "label": "confirm refused (expired hold)" } ]
+        ],
+        "yAxis": { "left": { "min": 0 } }
+      }
+    },
+
+    {
+      "type": "metric", "x": 0, "y": 16, "width": 4, "height": 5,
+      "properties": {
+        "title": "Conversion (captured / admissions, last hour)",
+        "view": "singleValue", "region": "eu-central-1", "period": 3600, "sparkline": false,
+        "metrics": [
+          [ { "expression": "SUM(SEARCH('{TicketWaitingRoom,outcome,service} MetricName=\"checkout.charges\" outcome=\"captured\"', 'Sum', 3600))", "id": "captured", "visible": false } ],
+          [ { "expression": "SUM(SEARCH('{TicketWaitingRoom,service} MetricName=\"waiting_room.admissions\"', 'Sum', 3600))", "id": "admissions", "visible": false } ],
+          [ { "expression": "IF(admissions > 0, 100 * captured / admissions, 0)", "id": "conversion", "label": "conversion %" } ]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 4, "y": 16, "width": 20, "height": 5,
+      "properties": {
+        "title": "Purchase funnel (per minute)",
+        "view": "singleValue", "region": "eu-central-1", "period": 60, "stat": "Sum", "sparkline": true,
+        "metrics": [
+          [ "TicketWaitingRoom", "waiting_room.joins",    "service", "waiting-room-service",     "status",  "WAITING",  { "label": "joins" } ],
+          [ "TicketWaitingRoom", "waiting_room.admissions", "service", "waiting-room-service",                          { "label": "admissions" } ],
+          [ "TicketWaitingRoom", "checkout.orders",       "service", "checkout-payment-service", "outcome", "created",  { "label": "orders" } ],
+          [ "TicketWaitingRoom", "checkout.charges",      "service", "checkout-payment-service", "outcome", "captured", { "label": "captured" } ],
+          [ "TicketWaitingRoom", "checkout.charges",      "service", "checkout-payment-service", "outcome", "declined", { "label": "declined" } ],
+          [ "TicketWaitingRoom", "tickets.issued",        "service", "ticket-issuance-service",  "outcome", "issued",   { "label": "tickets" } ],
+          [ "TicketWaitingRoom", "tickets.issued",        "service", "ticket-issuance-service",  "outcome", "duplicate",{ "label": "dup. deliveries" } ],
+          [ "TicketWaitingRoom", "notifications.sent",    "service", "notification-service",     "outcome", "sent",     { "label": "mails sent" } ],
+          [ "TicketWaitingRoom", "notifications.sent",    "service", "notification-service",     "outcome", "failed",   { "label": "mails failed" } ]
+        ]
+      }
+    },
+
+    {
+      "type": "metric", "x": 0, "y": 21, "width": 12, "height": 7,
+      "properties": {
+        "title": "Charge outcomes — the partial unique index at work",
+        "view": "timeSeries", "stacked": true, "region": "eu-central-1", "period": 60, "stat": "Sum",
+        "metrics": [
+          [ { "expression": "SEARCH('{TicketWaitingRoom,outcome,service} MetricName=\"checkout.charges\"', 'Sum', 60)", "id": "charges", "label": "[outcome]" } ]
+        ],
+        "yAxis": { "left": { "min": 0 } }
+      }
+    },
+    {
+      "type": "metric", "x": 12, "y": 21, "width": 12, "height": 7,
+      "properties": {
+        "title": "Request latency — average and max per endpoint (ms), health probes excluded",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60,
+        "metrics": [
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/events/{eventId}/seats/{seatId}/hold\"', 'Sum', 60)", "id": "hold_sum", "visible": false } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/events/{eventId}/seats/{seatId}/hold\"', 'SampleCount', 60)", "id": "hold_n", "visible": false } ],
+          [ { "expression": "SUM(hold_sum) / SUM(hold_n)", "id": "hold_avg", "label": "hold — avg" } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/orders/{orderId}/payment\"', 'Sum', 60)", "id": "pay_sum", "visible": false } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/orders/{orderId}/payment\"', 'SampleCount', 60)", "id": "pay_n", "visible": false } ],
+          [ { "expression": "SUM(pay_sum) / SUM(pay_n)", "id": "pay_avg", "label": "charge — avg" } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/events/{eventId}/queue\"', 'Sum', 60)", "id": "join_sum", "visible": false } ],
+          [ { "expression": "SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests\" uri=\"/events/{eventId}/queue\"', 'SampleCount', 60)", "id": "join_n", "visible": false } ],
+          [ { "expression": "SUM(join_sum) / SUM(join_n)", "id": "join_avg", "label": "queue join — avg" } ],
+          [ { "expression": "MAX(SEARCH('{TicketWaitingRoom,error,exception,method,outcome,service,status,uri} MetricName=\"http.server.requests.max\" uri=\"/events/{eventId}/seats/{seatId}/hold\"', 'Maximum', 60))", "id": "hold_max", "label": "hold — max" } ]
+        ],
+        "yAxis": { "left": { "min": 0, "label": "ms" } }
+      }
+    },
+
+    {
+      "type": "metric", "x": 0, "y": 28, "width": 8, "height": 6,
+      "properties": {
+        "title": "Saga executions",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60, "stat": "Sum",
+        "metrics": [
+          [ "AWS/States", "ExecutionsSucceeded", "StateMachineArn", "arn:aws:states:eu-central-1:<account-id>:stateMachine:checkout-saga", { "label": "succeeded", "color": "#2ca02c" } ],
+          [ "AWS/States", "ExecutionsFailed",    "StateMachineArn", "arn:aws:states:eu-central-1:<account-id>:stateMachine:checkout-saga", { "label": "failed",    "color": "#d62728" } ],
+          [ "AWS/States", "ExecutionTime",       "StateMachineArn", "arn:aws:states:eu-central-1:<account-id>:stateMachine:checkout-saga", { "label": "duration p90 (ms)", "stat": "p90", "yAxis": "right" } ]
+        ],
+        "yAxis": { "left": { "min": 0 }, "right": { "min": 0, "label": "ms" } }
+      }
+    },
+    {
+      "type": "metric", "x": 8, "y": 28, "width": 8, "height": 6,
+      "properties": {
+        "title": "Dead-letter queues — must stay at zero",
+        "view": "timeSeries", "stacked": false, "region": "eu-central-1", "period": 60, "stat": "Maximum",
+        "metrics": [
+          [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "ticket-issuance-dlq",                  { "label": "ticket-issuance-dlq" } ],
+          [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "qr-generation-dlq",                    { "label": "qr-generation-dlq" } ],
+          [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "purchase-confirmed-notifications-dlq", { "label": "notifications-dlq" } ],
+          [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "queue-admissions-dlq",                 { "label": "queue-admissions-dlq" } ]
+        ],
+        "yAxis": { "left": { "min": 0 } }
+      }
+    },
+    {
+      "type": "metric", "x": 16, "y": 28, "width": 8, "height": 6,
+      "properties": {
+        "title": "WAF on POST /purchase (session-only ACL)",
+        "view": "timeSeries", "stacked": true, "region": "eu-central-1", "period": 60, "stat": "Sum",
+        "metrics": [
+          [ "AWS/WAFV2", "AllowedRequests", "WebACL", "ticket-edge-waf", "Region", "eu-central-1", "Rule", "ALL",                  { "label": "allowed", "color": "#2ca02c" } ],
+          [ "AWS/WAFV2", "BlockedRequests", "WebACL", "ticket-edge-waf", "Region", "eu-central-1", "Rule", "purchase-rate-limit",  { "label": "blocked: rate limit", "color": "#ff7f0e" } ],
+          [ "AWS/WAFV2", "BlockedRequests", "WebACL", "ticket-edge-waf", "Region", "eu-central-1", "Rule", "purchase-bot-control", { "label": "blocked: bot control", "color": "#d62728" } ]
+        ],
+        "yAxis": { "left": { "min": 0 } }
+      }
+    }
+  ]
+}

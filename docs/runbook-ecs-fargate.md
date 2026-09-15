@@ -65,6 +65,7 @@ Trust policy principal `ecs-tasks.amazonaws.com`. Inline policy, and nothing els
       "Action": [
         "dynamodb:GetItem",
         "dynamodb:PutItem",
+        "dynamodb:Query",
         "dynamodb:UpdateItem"
       ],
       "Resource": "arn:aws:dynamodb:eu-central-1:<account-id>:table/seat-inventory"
@@ -73,9 +74,12 @@ Trust policy principal `ecs-tasks.amazonaws.com`. Inline policy, and nothing els
 }
 ```
 
-Those three actions are exactly what `SeatRepository` calls — no `Query`, no `Scan`, no
-`DeleteItem`, no wildcard on the resource. Note the deliberate absence of `DeleteItem`:
-expiring holds are DynamoDB's job via TTL, not the application's.
+Those actions are exactly what `SeatRepository` calls — no `Scan`, no `DeleteItem`, no
+wildcard on the resource. Note the deliberate absence of `DeleteItem`: expiring holds are
+DynamoDB's job via TTL, not the application's. `Query` was added on 2026-09-14 for the
+`seats.remaining` gauge's `countAvailable` (slice 7): the role refused it first, the gauge
+logged and kept its last reading, and the policy grew by one action — which is how a
+least-privilege role is supposed to grow. See `runbook-observability.md`.
 
 ## Console Steps (as performed)
 

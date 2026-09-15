@@ -276,7 +276,7 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       The concurrency ITs now also assert the metrics' view of each race: 50 charges →
       `captured` 1 + `in_flight`/`not_payable` 49; 20 deliveries → `issued` 1,
       `duplicate` 19. 147 tests green (2026-09-13)
-- [ ] AWS: ADOT collector sidecar in every task definition — see `runbook-observability.md`.
+- [x] AWS: ADOT collector sidecar in every task definition — see `runbook-observability.md`.
       Own config through SSM (`docs/otel-collector-config.yaml`: the image's default was
       checked and routes right, but with roll-ups on and a generic namespace),
       `TELEMETRY_EXPORT_ENABLED=true`, one `ticket-telemetry-export` policy on five task
@@ -287,10 +287,31 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       five revisions registered (`seat-inventory:5`, `waiting-room:4`, `checkout:7`,
       `issuance:5`, `notification:3`); all four target groups on `GET /actuator/health`
       matcher `200`; X-Ray on the `ticket-edge` stage, `checkout-saga` and all three
-      Lambdas. Left: the stack-up itself — runbook §9's claims, the warm-up's "fetched in
-      N ms" against slice 6's 12.8 s, and whether `http:invoke` forwards the trace header
-- [ ] CloudWatch dashboard: queue depth, seats remaining, hold contention, conversion
-- [ ] X-Ray tracing across APIGW → ECS → Step Functions → Lambda
+      Lambdas. **Run 2026-09-14/15 (`runbook-observability.md` Results):** warm-up pays the
+      JWKS cost at startup (2.7–13.6 s per service; first authenticated request 3.7–4.3 s
+      against slice 6's 12.8 s); every counter in the `TicketWaitingRoom` namespace matched
+      the traffic; **30 holds through the edge → 1×201, 29×409, the loss a faulted
+      `DynamoDB UpdateItem` subsegment; one purchase = one X-Ray trace of 18 segments, so
+      `http:invoke` does forward the header**, and the SQS consumer spans join it. Two
+      defects fixed in-session (task role lacked `dynamodb:Query`; EMF swallowed the first
+      delta), Step Functions' own segments absent (open), health-check and scheduled-task
+      traces to silence in code (2026-09-15)
+- [x] CloudWatch dashboard: queue depth, seats remaining, hold contention, conversion
+      — `ticket-waiting-room`, 12 widgets, source of truth `docs/dashboard-ticket-waiting-room.json`
+      (saved body verified byte-identical). Built with nothing running, against the
+      2026-09-15 data; counters read as per-minute deltas, gauges as max/min, the hold
+      contention widget carries **DynamoDB's own `ConditionalCheckFailedRequests` beside the
+      service's `unavailable` — 29 = 29**, conversion is metric math over captured/admissions.
+      Latency is avg + max, not p99: the timer exports Count/Sum, and a percentile needs the
+      histogram export queued for the load-test code change. First dashboard in the account,
+      $0 (2026-09-15)
+- [x] X-Ray tracing across APIGW → ECS → Step Functions → Lambda — one purchase is one
+      trace: `ticket-edge/dev` → the saga's four `http:invoke` calls back through the stage
+      into seat-inventory and checkout (security chain + `DynamoDB UpdateItem` subsegments)
+      → SQS → the issuance consumer span → SNS/SQS → the notification consumer span; the QR
+      Lambda is a linked trace of its own, as Lambda does for SQS triggers. **Open:** Step
+      Functions itself emitted no `checkout-saga` segment despite tracing on and `xray:*`
+      on its role — the header still propagates through it (2026-09-15)
 - [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;
       capture "0 double-sold seats" numbers + latency percentiles
 - **Learn:** custom metrics, X-Ray, load testing — this produces the README's money chart
