@@ -16,12 +16,15 @@
 // one laptop as the source keep USERS ≤ 100 per run, or put the rule in Count for it.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
 import { API, tokens, opsHeaders, customerHeaders, purchaseHeaders, seatIds, seed, uuid } from './lib.js';
 
 const USERS = Number(__ENV.USERS || 50);
 const SEATS = Number(__ENV.SEATS || 10);
-const EVENT = __ENV.EVENT || `buy-${Date.now()}`;
+// Passed in, never generated here: the init context runs once per VU and again for
+// setup, teardown and the summary, so a Date.now() here is a different event per VU.
+const EVENT = __ENV.EVENT || (() => { throw new Error('pass -e EVENT=<id> (one id per run)'); })();
 const ADMIT_BATCH = Number(__ENV.ADMIT_BATCH || 25);
 const SETTLE_TIMEOUT_S = Number(__ENV.SETTLE_TIMEOUT_S || 30);
 
@@ -83,7 +86,11 @@ export function doorman(data) {
 }
 
 export function customer(data) {
-  const me = tokens.users[__VU - 1];
+  // The scenario's iteration number, not __VU: VU ids are numbered across all scenarios,
+  // so with the doorman running beside the customers one of them would be VU 51 and have
+  // no token. Each customer runs exactly one iteration, so this is 1…USERS, once each.
+  const id = exec.scenario.iterationInTest + 1;
+  const me = tokens.users[id - 1];
   const headers = customerHeaders(me);
 
   // 1. Join. Idempotent by identity, so a retry cannot cost the place.
@@ -101,13 +108,13 @@ export function customer(data) {
   }
   if (!place || place.status !== 'ADMITTED') {
     unsettled.add(1);
-    console.error(`VU ${__VU}: never admitted (${place && place.status})`);
+    console.error(`customer ${id}: never admitted (${place && place.status})`);
     return;
   }
   waited.add(Date.now() - joinedAt);
 
   // 3. Buy. Everyone wants one of the same few seats.
-  const seat = data.seats[(__VU - 1) % data.seats.length];
+  const seat = data.seats[(id - 1) % data.seats.length];
   const orderId = uuid();
   const purchase = http.post(`${API}/events/${EVENT}/purchase`, JSON.stringify({
     orderId, seatId: seat, amountCents: 12000, paymentToken: 'tok_ok',
@@ -115,7 +122,7 @@ export function customer(data) {
   const acceptedAt = Date.now();
   if (!check(purchase, { 'purchase accepted (202)': (r) => r.status === 202 })) {
     unsettled.add(1);
-    console.error(`VU ${__VU}: purchase ${purchase.status} ${purchase.body}`);
+    console.error(`customer ${id}: purchase ${purchase.status} ${purchase.body}`);
     return;
   }
   accepted.add(purchase.timings.duration);
@@ -137,7 +144,7 @@ export function customer(data) {
         // An order that exists and failed means the hold was won but the charge lost:
         // not this scenario's expected path (tok_ok always captures). Count it, loudly.
         unsettled.add(1);
-        console.error(`VU ${__VU}: order ${orderId} ${status}`);
+        console.error(`customer ${id}: order ${orderId} ${status}`);
         return;
       }
     }
@@ -159,6 +166,6 @@ export function handleSummary(data) {
       purchase_accept_ms: data.metrics.purchase_accept_ms?.values,
       purchase_end_to_end_ms: data.metrics.purchase_end_to_end_ms?.values,
     }, null, 2) + '\n',
-    [`load-test/results/purchase-race-${EVENT}.json`]: JSON.stringify(data, null, 2),
+    [`results/purchase-race-${EVENT}.json`]: JSON.stringify(data, null, 2),
   };
 }

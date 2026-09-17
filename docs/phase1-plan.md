@@ -312,9 +312,21 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       Lambda is a linked trace of its own, as Lambda does for SQS triggers. **Open:** Step
       Functions itself emitted no `checkout-saga` segment despite tracing on and `xray:*`
       on its role — the header still propagates through it (2026-09-15)
-- [ ] Load test (k6/Gatling): N users racing the same seats through the full stack;
-      capture "0 double-sold seats" numbers + latency percentiles
-      — **code half done (2026-09-15):** timers export as ten-bucket histograms so CloudWatch
+- [x] Load test (k6/Gatling): N users racing the same seats through the full stack;
+      capture "0 double-sold seats" numbers + latency percentiles — see `runbook-load-test.md`.
+      **Run 2026-09-17, stack up 37 min, ≈ $0.09.** Scenario A, **200 VUs on 10 seats
+      through APIGW → ALB → JWT → DynamoDB → 10 won / 190 lost / 0 unexpected**, twice;
+      hot run winners p50 0.58 s / p99 1.20 s, losers p50 3.0 s / p99 5.0 s (queueing on one
+      0.25 vCPU task, not the write). Scenario B, **50 customers with their own Cognito
+      identities on 10 seats through the whole saga → 10 SUCCEEDED / 40 FAILED
+      SeatUnavailable**, purchase accepted p50 125 ms, winner end-to-end 202 → PAID
+      **p50 3.0 s / p95 4.1 s / p99 4.25 s**. In the stores: **seats SOLD = orders PAID =
+      payments CAPTURED = tickets = 10 = 10 = 10 = 10, 0 double-sold seats**, every
+      "must be 0" 0; DynamoDB's own `ConditionalCheckFailedRequests` (662) agrees with the
+      service's `unavailable` (660 + the two warm-up losses). Three script bugs found and
+      fixed in-session (init-context `Date.now()`, cross-scenario `__VU`, a k6 API that does
+      not exist); server-side p99 still open (EMF needs `detailed_metrics`). Code half
+      (2026-09-15): timers export as ten-bucket histograms so CloudWatch
       has real p99s; health probes and scheduled tasks are no longer observed (they were
       two-thirds of the traces); `load-test/` holds scenario A (seat race, S×201 + rest 409)
       and scenario B (M customers with their own identities race `/purchase` for S seats —

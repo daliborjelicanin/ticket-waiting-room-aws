@@ -14,7 +14,9 @@ import { API, opsHeaders, seatIds, seed } from './lib.js';
 
 const VUS = Number(__ENV.VUS || 200);
 const SEATS = Number(__ENV.SEATS || 10);
-const EVENT = __ENV.EVENT || `race-${Date.now()}`;
+// Passed in, never generated here: the init context runs once per VU and again for
+// setup, teardown and the summary, so a Date.now() here is a different event per VU.
+const EVENT = __ENV.EVENT || (() => { throw new Error('pass -e EVENT=<id> (one id per run)'); })();
 
 const won = new Counter('holds_won');
 const lost = new Counter('holds_lost');
@@ -81,6 +83,6 @@ export function handleSummary(data) {
       hold_won_ms: data.metrics.hold_latency_won?.values,
       hold_lost_ms: data.metrics.hold_latency_lost?.values,
     }, null, 2) + '\n',
-    [`load-test/results/seat-race-${EVENT}.json`]: JSON.stringify(data, null, 2),
+    [`results/seat-race-${EVENT}.json`]: JSON.stringify(data, null, 2),
   };
 }

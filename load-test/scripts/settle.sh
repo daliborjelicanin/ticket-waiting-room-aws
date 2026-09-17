@@ -7,9 +7,9 @@ set -euo pipefail
 EVENT=${1:?event id}
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
 SM=arn:aws:states:$REGION:<account-id>:stateMachine:checkout-saga
-SINCE=$(date -u -d '-2 hours' +%s)
+SINCE=$(date -u -d '-2 hours' +%FT%TZ)
 aws stepfunctions list-executions --region "$REGION" --state-machine-arn "$SM" --max-results 1000 --output json \
-| jq -r --argjson since "$SINCE" '.executions[] | select((.startDate|tonumber) > $since) | .executionArn' \
+| jq -r --arg since "$SINCE" '.executions[] | select(.startDate > $since) | .executionArn' \
 | while read -r arn; do
     aws stepfunctions describe-execution --region "$REGION" --execution-arn "$arn" --query '[status, error, input]' --output json \
     | jq -r --arg e "$EVENT" 'select(.[2] | fromjson | .eventId == $e) | "\(.[0]) \(.[1] // "-")"'

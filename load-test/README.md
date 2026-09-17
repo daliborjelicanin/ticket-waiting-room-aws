@@ -21,11 +21,12 @@ in `docs/runbook-load-test.md`; this is the mechanics.
 k6 is not installed on the laptop; the official image is enough:
 
 ```bash
-alias k6='docker run --rm -i -v "$PWD/load-test:/work" -w /work grafana/k6:0.55.0'
+# --user: the image runs k6 as its own uid, and .tokens.json is mode 600 for yours.
+alias k6='docker run --rm -i --user "$(id -u):$(id -g)" -v "$PWD/load-test:/work" -w /work grafana/k6:0.55.0'
 load-test/scripts/create-test-users.sh 50        # once
 load-test/scripts/mint-tokens.sh 50              # before every run (tokens live an hour)
-k6 run -e VUS=200 -e SEATS=10 k6/seat-race.js
-k6 run -e USERS=50 -e SEATS=10 k6/purchase-race.js
+k6 run -e EVENT=race-$(date +%s) -e VUS=200 -e SEATS=10 k6/seat-race.js
+k6 run -e EVENT=buy-$(date +%s)  -e USERS=50 -e SEATS=10 k6/purchase-race.js
 load-test/scripts/invariants.sh <event id printed by the run>
 load-test/scripts/settle.sh <event id>
 ```
@@ -35,6 +36,9 @@ numbers that matter.
 
 ## What the scripts assume
 
+- `EVENT` is passed in, one id per run: k6's init context runs once per VU and again for
+  setup, teardown and the summary, so an id generated in the script is a different event
+  for each of them (found the hard way on the first run: 200 × 409 on seats nobody seeded).
 - The stack is up per the runbooks (ALB, RDS, ElastiCache, five services, the connection).
 - `~/.ticket-waiting-room/cognito.env` holds `POOL_ID`, `WEB_CLIENT`, `TOKEN_URL`, and the
   operator client credentials, as the Cognito runbook left it.
