@@ -24,6 +24,12 @@ Per-module diagrams, with the internals each service is actually responsible for
 
 ## 1. System topology
 
+![ticket-waiting-room on AWS](diagrams/architecture.png)
+
+*Official AWS icons, generated from [`diagrams/architecture.py`](diagrams/architecture.py)
+— a mirror of the Mermaid below, which remains the source of truth. Regenerate after any
+change here: `docker run --rm -v "$PWD:/out" gtramontina/diagrams:0.23.4 docs/diagrams/architecture.py`.*
+
 Every box below exists and has run on AWS. Cognito and the purchase entry point are in
 `runbook-cognito-auth.md`; the WAF web ACL on the REST stage — a per-IP rate limit and
 Bot Control, both scoped to `POST /events/{id}/purchase` — in `runbook-waf.md`.

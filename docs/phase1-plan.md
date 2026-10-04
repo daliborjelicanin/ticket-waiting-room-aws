@@ -336,7 +336,12 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 - **Learn:** custom metrics, X-Ray, load testing — this produces the README's money chart
 .
 ### 8. Wrap-up
-- [ ] README: architecture diagram, "why each service exists", concurrency deep-dive, load-test results, cost notes
+- [x] README: architecture diagram, "why each service exists", concurrency deep-dive, load-test results, cost notes
+      — the AWS-icon poster (`docs/diagrams/architecture.png`, generated from code) opens
+      it; the load-test tables and the invariant block are the headline; every mechanism
+      has its local and its AWS proof side by side; cost is stated as standing / per hour /
+      per session / phase total; the deliberate simplifications are named with what Phase
+      2 does about them (2026-09-17)
 - [ ] Full teardown sweep (tag-based search for stragglers)
 - [ ] Phase 1 retro notes → input for Terraform (Phase 2)
 

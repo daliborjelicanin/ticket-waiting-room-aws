@@ -29,7 +29,12 @@ edges — and each module has an `ARCHITECTURE.md` beside its code with that mod
 internals. They are Mermaid, so they render in IntelliJ and on GitHub and diff as text.
 Keep them true to the code: a diagram that describes the plan rather than what is built
 is worse than none, so update the module's `ARCHITECTURE.md` in the same change that
-alters its behaviour, and mark not-yet-built boxes as such.
+alters its behaviour, and mark not-yet-built boxes as such. One picture is not Mermaid:
+`docs/diagrams/architecture.png`, the system topology with official AWS icons for the
+README, generated from `docs/diagrams/architecture.py` (the `diagrams` library, run from
+the `gtramontina/diagrams` image — nothing to install). It mirrors `docs/architecture.md`
+§1 and is regenerated whenever §1 changes; the Mermaid stays the source of truth because
+it diffs as text.
 
 ## Tech Stack
 
