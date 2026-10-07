@@ -11,6 +11,19 @@ subprojects {
         }
     }
 
+    // Security floors from gradle/libs.versions.toml: constraints, not dependencies, so a
+    // module without Tomcat or Jackson (the Lambdas) gains nothing.
+    val catalog = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
+    dependencies {
+        constraints {
+            val tomcat = catalog.findVersion("tomcatSecurityFloor").get().requiredVersion
+            val jackson = catalog.findVersion("jacksonSecurityFloor").get().requiredVersion
+            "implementation"("org.apache.tomcat.embed:tomcat-embed-core:$tomcat") { because("security floor, see libs.versions.toml") }
+            "implementation"("tools.jackson.core:jackson-core:$jackson") { because("security floor, see libs.versions.toml") }
+            "implementation"("tools.jackson.core:jackson-databind:$jackson") { because("security floor, see libs.versions.toml") }
+        }
+    }
+
     tasks.withType<Test> {
         useJUnitPlatform()
         // The four HTTP services refuse to start without a JWT issuer, on purpose. Tests get a

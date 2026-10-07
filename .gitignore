@@ -16,3 +16,28 @@ out/
 load-test/.tokens.json
 load-test/results/*
 !load-test/results/.gitkeep
+
+# Secrets: never commit. Local env files hold credentials (even LocalStack's are a bad habit
+# to normalise), and keys belong in a secret store.
+*.env
+.env
+.env.*
+local/env/
+*.pem
+*.key
+
+# Terraform (Phase 2). State and plans hold secrets in plain text -- generated passwords,
+# client secrets -- so they live in the S3 backend, never in git. The dependency lock file
+# .terraform.lock.hcl IS committed: it pins provider checksums.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
