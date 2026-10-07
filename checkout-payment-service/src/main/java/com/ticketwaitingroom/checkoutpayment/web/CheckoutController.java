@@ -6,6 +6,8 @@ import com.ticketwaitingroom.checkoutpayment.order.OrderSeat;
 import com.ticketwaitingroom.checkoutpayment.order.OrderStatus;
 import com.ticketwaitingroom.checkoutpayment.payment.ChargeOutcome;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentStatus;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundOutcome;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -23,10 +25,10 @@ import java.util.UUID;
 /**
  * HTTP surface for checkout, split across the two doors.
  *
- * <p>{@code POST /orders} and {@code POST /orders/{id}/payment} are <strong>saga</strong>
- * endpoints: {@code SecurityConfig} admits only a token carrying the ops scope, which
+ * <p>{@code POST /orders}, {@code POST /orders/{id}/payment} and
+ * {@code POST /orders/{id}/refund} are <strong>saga</strong> endpoints: {@code SecurityConfig} admits only a token carrying the ops scope, which
  * Step Functions presents. They take a caller-supplied idempotency key, because the saga
- * retries them and a retry must never become a second order or a second charge. The
+ * retries them and a retry must never become a second order, charge or refund. The
  * customer's identity arrives in the body: the saga is trusted to name the customer
  * because its input was built by API Gateway from that customer's own verified token.
  *
@@ -69,6 +71,17 @@ public class CheckoutController {
                 outcome.payment().getFailureReason());
     }
 
+    @PostMapping("/orders/{orderId}/refund")
+    public RefundResponse refund(@PathVariable UUID orderId, @RequestBody RefundRequest request) {
+        RefundOutcome outcome = checkoutService.refund(orderId, request.idempotencyKey(), request.reason());
+        return new RefundResponse(
+                outcome.order().getId(),
+                outcome.order().getStatus(),
+                outcome.refund().getStatus(),
+                outcome.refund().getGatewayRef(),
+                outcome.refund().getFailureReason());
+    }
+
     @PostMapping("/orders/{orderId}/cancel")
     public OrderResponse cancel(@PathVariable UUID orderId, @AuthenticationPrincipal Jwt caller) {
         return OrderResponse.of(checkoutService.cancel(orderId, caller.getSubject()));
@@ -82,6 +95,11 @@ public class CheckoutController {
     public record ChargeRequest(String idempotencyKey, String paymentToken) { }
 
     public record ChargeResponse(UUID orderId, OrderStatus orderStatus, PaymentStatus paymentStatus,
+                                 String gatewayRef, String failureReason) { }
+
+    public record RefundRequest(String idempotencyKey, String reason) { }
+
+    public record RefundResponse(UUID orderId, OrderStatus orderStatus, RefundStatus refundStatus,
                                  String gatewayRef, String failureReason) { }
 
     public record OrderResponse(UUID id, String eventId, String customerRef, OrderStatus status,

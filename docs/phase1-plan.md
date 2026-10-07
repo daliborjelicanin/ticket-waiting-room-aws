@@ -1,5 +1,10 @@
 # Phase 1 Plan — Manual ECS/Fargate, Low-Cost
 
+**Status: complete (2026-10-07).** Every required slice is done and the account bills
+nothing by the hour (`runbook-teardown-sweep.md`). Phase 2 starts from `phase1-retro.md`.
+One item is proven locally only: the post-capture refund, whose AWS run is the first thing
+Phase 2's stack does.
+
 Goal of this phase: every AWS component built **by hand once**, understood, documented,
 and torn down. The learning notes captured here become the Terraform spec in Phase 2.
 
@@ -112,7 +117,8 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       **AVAILABLE** with `holdId` cleared, **no** message enqueued, order FAILED/DECLINED.
       `ChargePayment` shows *succeeded* in both — proving the Choice routed the failure,
       not a Catch (2026-08-27)
-- **Teardown:** stop/delete RDS (keep final snapshot), delete ECS service
+- **Teardown:** delete RDS with `--skip-final-snapshot` (Flyway + seed rebuild it in a
+  minute, and a snapshot bills indefinitely, see `runbook-checkout-rds.md`), delete ECS service
 - **Learn:** Step Functions, saga compensation, Secrets Manager, SQS
 
 ### 5. Ticket Issuance + Notification — $0 standing
@@ -257,7 +263,10 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       → 401 from the authorizer; other paths untouched.** One trap: AWS CLI v2 base64-decodes
       `SearchString`, so the first build matched nothing and read back as if it did.
       Session-only — ~$17/mo if forgotten (2026-09-13)
-- [ ] Optional: CloudFront + S3 static frontend; skip Route 53/ACM custom domain unless I want the vanity URL
+- **Skipped by decision:** optional CloudFront + S3 static frontend, and the Route 53/ACM
+  custom domain. The proof is the API, and README *Deliberate simplifications* says so. A
+  domain is still the one way to fix SES inbox placement (DKIM), so it is carried into
+  `phase1-retro.md` §7 rather than dropped
 - **Learn:** APIGW ↔ ALB integration, WebSocket APIs, Cognito, WAF rules
 
 ### 7. Observability + the proof — $0–few $ per load-test session
@@ -332,9 +341,9 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       and scenario B (M customers with their own identities race `/purchase` for S seats —
       S sagas succeed, the rest fail at `HoldSeat`), the user/token scripts and the
       invariant check. Both scenarios pass `k6 inspect` in the official image; the session
-      itself is next (images to rebuild first — the histogram/predicate change is code)
+      itself followed on 2026-09-17, above, on rebuilt images
 - **Learn:** custom metrics, X-Ray, load testing — this produces the README's money chart
-.
+
 ### 8. Wrap-up
 - [x] README: architecture diagram, "why each service exists", concurrency deep-dive, load-test results, cost notes
       — the AWS-icon poster (`docs/diagrams/architecture.png`, generated from code) opens
@@ -342,8 +351,37 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
       has its local and its AWS proof side by side; cost is stated as standing / per hour /
       per session / phase total; the deliberate simplifications are named with what Phase
       2 does about them (2026-09-17)
-- [ ] Full teardown sweep (tag-based search for stragglers)
-- [ ] Phase 1 retro notes → input for Terraform (Phase 2)
+- [x] Full teardown sweep (tag-based search for stragglers) — see `runbook-teardown-sweep.md`,
+      `scripts/teardown-sweep.sh` (read-only, exits 1 on anything billing). **Nothing billing
+      in any region**; October to date $0.02. The tag search alone returned 59 ARNs and
+      **missed 15 project resources**, including the whole `qr-generation` function, so the
+      script also queries every billable service directly and checks project-named
+      resources against the tag index. Free leftovers listed with their delete commands, not
+      deleted: a superseded image per service repo (ECR 2.14 GB ≈ $0.16/mo against the
+      README's $0.07), the three pre-`ticket-edge` HTTP APIs, two console-made IAM roles,
+      19 stale task-definition revisions (2026-10-05)
+- [x] Phase 1 retro notes → input for Terraform (Phase 2) — see `phase1-retro.md`: a
+      `foundation`/`session` stack split taken from the teardown lists, the values every
+      rebuild minted (each now a reference), sixteen silent defaults to pin, the network
+      decision with Price List numbers (NAT gateway beats interface endpoints at this
+      scale), destroy-don't-import, and the open defects carried over (2026-10-05)
+- [x] Refund compensation after capture — the gap the retro surfaced: CLAUDE.md requires that
+      no compensating action is silently dropped, and after a capture the saga simply stopped
+      at `PaidButNotConfirmed` with the money kept and no alarm in the account. **A latent bug
+      came first:** the seat confirm was not idempotent, so a retry whose predecessor committed
+      but lost its response got a 404 for a seat it had just bought, and refunding on that
+      404 would have handed out the seat for free. The confirm now answers a replay of the
+      winning hold with 200 (`ALL_OLD` on the failed condition, one round trip), so a 404 is
+      a definite "not yours". The saga refunds on that 404 alone, then releases the hold. A
+      timeout still stops at `PaidButNotConfirmed`, because nobody can know whether the seat
+      sold. The refund copies the charge: claim before the call, gateway outside any
+      transaction, key before state, and `ux_refunds_one_live_per_payment` (V2) as the
+      no-double-refund rule. **100 concurrent confirms of one hold → 1 write, 99 replays;
+      50 concurrent refunds with distinct keys → 1 SUCCEEDED, gateway asked once**; the ASL
+      passes the Step Functions validator; `CheckoutSagaContractTest` pins the request bodies,
+      the Choice fields and the 404-only route. 167 tests green. **AWS proof is carried into
+      the first Phase 2 stack-up** (`runbook-checkout-saga.md`, *The Refund Path*: deploy
+      seat-inventory first, then force a hold to expire mid-payment) (2026-10-07)
 
 ## Explicitly Excluded from Phase 1 (cost or scope)
 
@@ -355,5 +393,9 @@ console/CLI steps → (e) tear down**. Code keeps advancing between AWS sessions
 
 ## Standing Cost While Idle (everything torn down)
 
-DynamoDB table + ECR image + Lambda/Step Functions/SQS/SNS definitions + CloudWatch ≈ **$0/mo**. 
-The only recurring risk is a forgotten session-only resource - hence the teardown checklists and tag sweep.
+DynamoDB tables, Lambda/Step Functions/SQS/SNS definitions, Cognito and CloudWatch are $0.
+The one standing charge is ECR past its 500 MB free tier: **≈ $0.16/mo at 2.14 GB** as of
+2026-10-07, or ≈ $0.07/mo once the superseded `5e3c555` images are deleted
+(`runbook-teardown-sweep.md`). September's whole bill was $0.96 including tax. The only
+recurring risk is a forgotten session-only resource, which is why every runbook has a
+teardown checklist and `scripts/teardown-sweep.sh` exists.

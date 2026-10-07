@@ -53,6 +53,8 @@ class SeatInventoryMetricsTest {
         doThrow(new HoldNotFoundException("gone")).when(repository).releaseHold("evt-1", "A-1", "h-stale");
         assertThatThrownBy(() -> service.releaseHold("evt-1", "A-1", "h-stale")).isInstanceOf(HoldNotFoundException.class);
 
+        when(repository.confirmPurchase(eq("evt-1"), eq("A-3"), eq("h-3"), any())).thenReturn(true, false);
+        service.confirmPurchase("evt-1", "A-3", "h-3");
         service.confirmPurchase("evt-1", "A-3", "h-3");
         doThrow(new HoldNotFoundException("expired")).when(repository).confirmPurchase(eq("evt-1"), eq("A-4"), eq("h-4"), any());
         assertThatThrownBy(() -> service.confirmPurchase("evt-1", "A-4", "h-4")).isInstanceOf(HoldNotFoundException.class);
@@ -60,6 +62,7 @@ class SeatInventoryMetricsTest {
         assertThat(registry.get("seat.hold.releases").tag("outcome", "released").counter().count()).isEqualTo(1);
         assertThat(registry.get("seat.hold.releases").tag("outcome", "not_found").counter().count()).isEqualTo(1);
         assertThat(registry.get("seat.purchase.confirmations").tag("outcome", "confirmed").counter().count()).isEqualTo(1);
+        assertThat(registry.get("seat.purchase.confirmations").tag("outcome", "replayed").counter().count()).isEqualTo(1);
         assertThat(registry.get("seat.purchase.confirmations").tag("outcome", "not_found").counter().count()).isEqualTo(1);
     }
 

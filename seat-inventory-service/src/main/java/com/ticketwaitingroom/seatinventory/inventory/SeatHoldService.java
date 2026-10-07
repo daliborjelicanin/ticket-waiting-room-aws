@@ -63,18 +63,22 @@ public class SeatHoldService {
     }
 
     /**
-     * Confirm the purchase of a held seat, marking it sold.
+     * Confirm the purchase of a held seat, marking it sold. A repeat for a hold that already
+     * won succeeds without writing (see {@link SeatRepository#confirmPurchase}), so the
+     * caller can retry until it gets an answer.
      *
      * @throws HoldNotFoundException if the seat is not currently held under this holdId,
-     *                               or the hold has expired
+     *                               or the hold has expired, and was not already sold
+     *                               under it
      */
     public void confirmPurchase(String eventId, String seatId, String holdId) {
+        boolean sold;
         try {
-            seatRepository.confirmPurchase(eventId, seatId, holdId, clock.instant());
+            sold = seatRepository.confirmPurchase(eventId, seatId, holdId, clock.instant());
         } catch (HoldNotFoundException stale) {
-            metrics.purchaseConfirmed(eventId, false);
+            metrics.purchaseConfirmed(eventId, "not_found");
             throw stale;
         }
-        metrics.purchaseConfirmed(eventId, true);
+        metrics.purchaseConfirmed(eventId, sold ? "confirmed" : "replayed");
     }
 }

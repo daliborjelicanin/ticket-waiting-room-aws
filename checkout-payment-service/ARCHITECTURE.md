@@ -15,16 +15,18 @@ flowchart TB
     SFN["Step Functions saga<br/>retries every call — so every<br/>mutating endpoint takes an idempotency key"]
 
     subgraph svc["checkout-payment-service — ECS Fargate task"]
-        CC["CheckoutController<br/>saga door (ops scope): POST /orders · POST /orders/{id}/payment<br/>fan door (any token): GET /orders/{id} · POST /orders/{id}/cancel<br/>fan door is scoped to the JWT's sub"]
+        CC["CheckoutController<br/>saga door (ops scope): POST /orders · POST /orders/{id}/payment · POST /orders/{id}/refund<br/>fan door (any token): GET /orders/{id} · POST /orders/{id}/cancel<br/>fan door is scoped to the JWT's sub"]
         CS["CheckoutService<br/><b>not transactional</b> — spans the gateway call"]
-        PS["PaymentService<br/>the two transactional units"]
+        PS["PaymentService<br/>the two transactional units of a charge"]
+        RS["RefundService<br/>the two transactional units of a refund"]
         OR["OrderRepository"]
         PR["PaymentRepository"]
-        EH["ApiExceptionHandler<br/>ChargeInProgress → 409 · NotPayable → 409 · NotFound → 404"]
+        RR["RefundRepository"]
+        EH["ApiExceptionHandler<br/>ChargeInProgress / RefundInProgress → 409<br/>NotPayable / NotRefundable → 409 · NotFound → 404"]
     end
 
     subgraph gw["PaymentGateway interface"]
-        MOCK["MockPaymentGateway<br/>decline-rate / error-rate / latency<br/>chaos knobs for load testing"]
+        MOCK["MockPaymentGateway<br/>charge + refund, both idempotent on key<br/>decline-rate / error-rate / latency<br/>chaos knobs for load testing"]
         REAL["a real provider — same interface"]
     end
 
@@ -33,6 +35,7 @@ flowchart TB
     SFN --> CC --> CS
     CC -.-> EH
     CS --> PS --> OR & PR --> PGDB
+    CS --> RS --> OR & PR & RR
     CS --> gw
     SM["Secrets Manager<br/>RDS-managed master password,<br/>fetched by the <i>execution</i> role<br/>before the container starts"] -.-> PGDB
 ```
@@ -43,12 +46,13 @@ flowchart TB
 erDiagram
     ORDERS ||--o{ ORDER_SEATS : "covers"
     ORDERS ||--o{ PAYMENTS : "attempts"
+    PAYMENTS ||--o{ REFUNDS : "reversed by"
 
     ORDERS {
         uuid id PK
         text event_id
         text customer_ref
-        text status "PENDING|PAID|FAILED|CANCELLED"
+        text status "PENDING|PAID|FAILED|CANCELLED|REFUNDED"
         bigint amount_cents "integer minor units"
         varchar currency
         text idempotency_key UK "uq_orders_idempotency_key"
@@ -75,6 +79,21 @@ erDiagram
         timestamptz created_at
         timestamptz completed_at
     }
+
+    REFUNDS {
+        uuid id PK
+        uuid order_id FK
+        uuid payment_id FK "the capture reversed"
+        text status "PENDING|SUCCEEDED|FAILED"
+        bigint amount_cents "always the full capture"
+        varchar currency
+        text reason
+        text gateway_ref
+        text failure_reason
+        text idempotency_key UK "uq_refunds_idempotency_key"
+        timestamptz created_at
+        timestamptz completed_at
+    }
 ```
 
 The invariant that justifies Postgres for this data is not in that table listing — it is
@@ -90,6 +109,18 @@ CREATE UNIQUE INDEX ux_payments_one_live_per_order
 is for, and exactly what a key-value store cannot declare — there the rule would have to
 be reimplemented, correctly, in every writer. `DECLINED` and `FAILED` sit outside the
 predicate on purpose, leaving room for a retry-with-another-card flow.
+
+Refunds (V2) get the same treatment, so a payment is refunded at most once:
+
+```sql
+CREATE UNIQUE INDEX ux_refunds_one_live_per_payment
+    ON refunds (payment_id)
+    WHERE status IN ('PENDING', 'SUCCEEDED');
+```
+
+Refunds are always for the full captured amount, so "one live refund" and "never give back
+more than was taken" are the same rule. A failed refund leaves the index, so an operator can
+retry it under a new key.
 
 ## Transaction boundaries around the gateway
 
@@ -135,6 +166,13 @@ sequenceDiagram
 PENDING payment row — a charge that may have moved money, with a row to prove it — rather
 than a charge nobody has any record of.
 
+**A refund has the same shape.** `RefundService.beginRefund` checks the key, then requires
+the order to be PAID, and commits a PENDING refund through
+`ux_refunds_one_live_per_payment`. The gateway's `refund` is called with nothing held.
+`completeRefund` then writes SUCCEEDED + order REFUNDED, or FAILED with the order left
+PAID, in one transaction. The saga only asks for a refund after the seat inventory has
+*definitively* refused the confirm (see `docs/architecture.md` §3).
+
 ## What the dashboard reads
 
 `CheckoutMetrics`, from `CheckoutService` where the outcome is decided:
@@ -146,6 +184,9 @@ the last two together are N−1 of every N — which is which depends on how lat
 was. `checkout.orders{created|replayed}` shows saga retries; `checkout.gateway.latency`
 times the gateway call alone, the network the transaction is deliberately not held across,
 which is the number that climbs in a provider outage while the pool stays healthy.
+`checkout.refunds{outcome}` is `refunded`, `failed`, `replayed`, `in_flight` or
+`not_refundable`. It should sit near zero. `refunded` is a paid seat that could not be
+confirmed; `failed` is money still taken with no seat to show for it.
 `captured` over the waiting room's `admissions` is the conversion rate, computed on the
 dashboard.
 
@@ -175,9 +216,11 @@ stateDiagram-v2
     PENDING --> PAID: payment CAPTURED
     PENDING --> FAILED: declined or gateway error<br/>→ saga releases the seat holds
     PENDING --> CANCELLED: cancel — holds become releasable
+    PAID --> REFUNDED: refund SUCCEEDED<br/>seat definitively not confirmed
     PAID --> [*]
     FAILED --> [*]
     CANCELLED --> [*]
+    REFUNDED --> [*]
 ```
 
 ## Proven
@@ -187,3 +230,10 @@ stateDiagram-v2
 CAPTURED row**; a replay of a settled key returned the original `gatewayRef`; the decline
 path left `FAILED`/`DECLINED`. Re-checked in SQL against the live instance: 0 orders with
 more than one live payment, 0 CAPTURED payments whose order is not PAID (2026-08-27).
+
+Refunds (2026-10-07, Testcontainers Postgres; **not yet run on AWS**): **50 concurrent
+refunds with distinct keys on one paid order → exactly one SUCCEEDED, the gateway asked
+once, order REFUNDED**; 50 retries of one key refund once and all agree on the answer; a
+replay after the order is REFUNDED returns the original refund; PENDING and declined orders
+are not refundable; a gateway refund failure leaves the order PAID. `CheckoutSagaContractTest`
+pins the saga's request bodies and Choice fields to this controller's records.

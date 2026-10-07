@@ -32,7 +32,7 @@ flowchart TB
     SHC --> SHS --> SR --> D
     SSC --> SSS --> SR
     SHC -.-> EH
-    SHS -.->|"held / unavailable<br/>released / confirmed / not_found"| MET
+    SHS -.->|"held / unavailable<br/>released / confirmed / replayed / not_found"| MET
     MET -->|"COUNT query per known event, every 30s"| SR
     HC --> D
 
@@ -48,7 +48,8 @@ attribute name. It is a condition that silently never matches.
 
 `SeatHoldService` counts each transition by its outcome — the repository knows it lost a
 conditional write, the service knows what that meant — into `seat.hold.attempts`,
-`seat.hold.releases` and `seat.purchase.confirmations`, each tagged `outcome`. Under the
+`seat.hold.releases` and `seat.purchase.confirmations`, each tagged `outcome` (a
+confirmation can also be `replayed`, a retried confirm for a hold that already won). Under the
 load test `held` : `unavailable` on one seat is the headline ratio. `seats.remaining{event}`
 is a gauge refreshed on a schedule from `SeatRepository.countAvailable` — a `Select.COUNT`
 query with a server-side status filter, paged because DynamoDB pages on bytes read rather
@@ -90,10 +91,11 @@ stateDiagram-v2
     HELD --> AVAILABLE: <b>releaseHold</b><br/>if status = HELD AND holdId = mine<br/>REMOVE holdId, holdExpiresAt
     HELD --> AVAILABLE: <b>lambda reclaim</b><br/>if HELD AND holdId = scanned AND holdExpiresAt &lt;= now
     HELD --> SOLD: <b>confirmPurchase</b><br/>if HELD AND holdId = mine AND holdExpiresAt &gt; now<br/>REMOVE holdExpiresAt
+    SOLD --> SOLD: <b>confirmPurchase replayed</b><br/>condition fails · ALL_OLD = SOLD, holdId = mine<br/>200, nothing written
     SOLD --> [*]
 ```
 
-Three guards worth spelling out:
+Four guards worth spelling out:
 
 - **`holdId` on release** — without it a stale caller, whose hold already expired and was
   re-acquired by someone else, would tear up the *current* owner's hold.
@@ -102,6 +104,15 @@ Three guards worth spelling out:
   would otherwise still be confirmable.
 - **`REMOVE holdExpiresAt` on confirm** — otherwise TTL eventually deletes a SOLD seat,
   and the seat vanishes from inventory rather than staying sold.
+- **Confirm is idempotent on the winning hold.** The saga retries the confirm, and before
+  2026-10-07 a retry whose predecessor had committed but lost its response found the seat
+  SOLD and got a 404. The saga now *refunds* on a 404, so that answer would have handed
+  the buyer both the seat and their money. The write asks for
+  `ReturnValuesOnConditionCheckFailure = ALL_OLD`. A failed condition then returns the item
+  as it stood, in the same round trip, and SOLD under the caller's own `holdId` is answered
+  200 without writing. SOLD is terminal and a hold id is never reused, so the answer
+  cannot go stale. Every other failed condition stays a 404, and that is what makes the
+  404 safe to refund on.
 
 ## The race
 
@@ -129,6 +140,9 @@ sequenceDiagram
 ## Proven
 
 `SeatHoldConcurrencyIT` locally, and on real Fargate + DynamoDB:
-**30 concurrent holds on one seat → 1×201, 29×409** (2026-08-22).
+**30 concurrent holds on one seat → 1×201, 29×409** (2026-08-22). Idempotent confirm
+(2026-10-07, LocalStack; not yet on AWS): **100 concurrent confirms of one hold → one
+write, 99 replays, 0 refusals**. A confirm under a different hold on a SOLD seat, and one
+after the hold was released, are both still refused.
 `SeatStatusSchemaContractTest` pins the enum to `SeatTableSchema`'s string constants so
 the two writers cannot drift apart silently.

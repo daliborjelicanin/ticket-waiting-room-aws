@@ -113,24 +113,30 @@ class SeatHoldConcurrencyIT {
     }
 
     @Test
-    void exactlyOneDuplicateConfirmWins() throws InterruptedException {
+    void duplicateConfirmsSellOnceAndEveryReplaySucceeds() throws InterruptedException {
         int attempts = 100;
         repository.holdSeat(EVENT_ID, SEAT_ID, "hold-1", Instant.now().plus(Duration.ofMinutes(5)));
-        AtomicInteger successes = new AtomicInteger();
-        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger sold = new AtomicInteger();
+        AtomicInteger replayed = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
 
-        // duplicate/retried confirm requests for the same hold must sell the seat once
+        // Retried confirms for the same hold: one write, and every duplicate is told "yes".
+        // A duplicate told "no" is what used to send a sold seat down the saga's refund path.
         race(attempts, i -> {
             try {
-                repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now());
-                successes.incrementAndGet();
-            } catch (HoldNotFoundException lost) {
-                failures.incrementAndGet();
+                if (repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now())) {
+                    sold.incrementAndGet();
+                } else {
+                    replayed.incrementAndGet();
+                }
+            } catch (HoldNotFoundException wrong) {
+                refused.incrementAndGet();
             }
         });
 
-        assertThat(successes).as("exactly one confirm succeeds").hasValue(1);
-        assertThat(failures).hasValue(attempts - 1);
+        assertThat(sold).as("exactly one confirm performs the write").hasValue(1);
+        assertThat(replayed).as("every duplicate is a replay").hasValue(attempts - 1);
+        assertThat(refused).as("no duplicate of the winning hold is refused").hasValue(0);
 
         Seat seat = repository.getSeat(EVENT_ID, SEAT_ID);
         assertThat(seat).isNotNull();
@@ -150,8 +156,8 @@ class SeatHoldConcurrencyIT {
                 if (i % 2 == 0) {
                     repository.releaseHold(EVENT_ID, SEAT_ID, "hold-1");
                     releases.incrementAndGet();
-                } else {
-                    repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now());
+                } else if (repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now())) {
+                    // only the write counts: replays of a winning confirm are not a second sale
                     confirms.incrementAndGet();
                 }
             } catch (HoldNotFoundException lost) {
@@ -183,6 +189,30 @@ class SeatHoldConcurrencyIT {
         Seat seat = repository.getSeat(EVENT_ID, SEAT_ID);
         assertThat(seat).isNotNull();
         assertThat(seat.status()).as("reclaiming the expired hold is the cleanup slice's job").isEqualTo(SeatStatus.HELD);
+    }
+
+    /**
+     * The other half of idempotency: a replay is recognised by the <em>hold</em>, not the
+     * seat. A confirm under any other hold id is a definite refusal even though the seat is
+     * SOLD, because that is the answer the saga refunds on.
+     */
+    @Test
+    void aSoldSeatRefusesEveryOtherHold() {
+        repository.holdSeat(EVENT_ID, SEAT_ID, "hold-1", Instant.now().plus(Duration.ofMinutes(5)));
+        repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now());
+
+        assertThatThrownBy(() -> repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-2", Instant.now()))
+                .isInstanceOf(HoldNotFoundException.class);
+        assertThat(repository.getSeat(EVENT_ID, SEAT_ID).holdId()).isEqualTo("hold-1");
+    }
+
+    @Test
+    void aReleasedHoldIsRefusedNotReplayed() {
+        repository.holdSeat(EVENT_ID, SEAT_ID, "hold-1", Instant.now().plus(Duration.ofMinutes(5)));
+        repository.releaseHold(EVENT_ID, SEAT_ID, "hold-1");
+
+        assertThatThrownBy(() -> repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-1", Instant.now()))
+                .isInstanceOf(HoldNotFoundException.class);
     }
 
     @Test

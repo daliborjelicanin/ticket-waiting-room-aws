@@ -115,6 +115,10 @@ public class Order {
         return status == OrderStatus.PENDING;
     }
 
+    public boolean isPaid() {
+        return status == OrderStatus.PAID;
+    }
+
     /**
      * Mark the order paid. Guarded on PENDING so a duplicate completion — a retried saga
      * step, a redelivered message — cannot move an order out of a terminal state.
@@ -131,6 +135,19 @@ public class Order {
     /** Abandon the order before payment. Also releases seat holds via the saga. */
     public void markCancelled(Instant now) {
         transitionFromPending(OrderStatus.CANCELLED, now);
+    }
+
+    /**
+     * Mark a paid order refunded. The one transition out of PAID, and guarded on it, so a
+     * refund can never be recorded against an order that took no money.
+     */
+    public void markRefunded(Instant now) {
+        if (status != OrderStatus.PAID) {
+            throw new IllegalStateException(
+                    "Order " + id + " is " + status + " and cannot become " + OrderStatus.REFUNDED);
+        }
+        this.status = OrderStatus.REFUNDED;
+        this.updatedAt = now;
     }
 
     private void transitionFromPending(OrderStatus target, Instant now) {

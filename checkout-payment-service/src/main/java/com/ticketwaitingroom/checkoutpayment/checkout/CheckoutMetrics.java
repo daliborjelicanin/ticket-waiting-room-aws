@@ -1,6 +1,7 @@
 package com.ticketwaitingroom.checkoutpayment.checkout;
 
 import com.ticketwaitingroom.checkoutpayment.payment.GatewayResult;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundResult;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,11 @@ import java.util.function.Supplier;
  *       partial unique index refusing a second live attempt and {@code not_payable} is an
  *       attempt that arrived after the order had already settled — under the concurrency
  *       test the two together are N−1 of every N, split by how late each loser was.</dd>
+ *   <dt>{@code checkout.refunds} · {@code outcome=refunded|failed|replayed|in_flight|not_refundable}</dt>
+ *   <dd>The saga's compensation after a capture, which should be close to zero. Any
+ *       {@code refunded} is a paid seat that could not be confirmed, which is worth knowing
+ *       on its own. {@code failed} is money still taken with no seat to show for it, and
+ *       the one this counter exists to make visible.</dd>
  *   <dt>{@code checkout.gateway.latency}</dt>
  *   <dd>The gateway call alone — the network the transaction is deliberately not held
  *       across. The mock's configured latency shows up here first, and in a real provider's
@@ -42,6 +48,10 @@ public class CheckoutMetrics {
         registry.counter("checkout.charges", "outcome", outcome).increment();
     }
 
+    public void refunded(String outcome) {
+        registry.counter("checkout.refunds", "outcome", outcome).increment();
+    }
+
     public GatewayResult timeGateway(Supplier<GatewayResult> call) {
         Timer.Sample sample = Timer.start(registry);
         try {
@@ -57,6 +67,14 @@ public class CheckoutMetrics {
             case GatewayResult.Approved _ -> "captured";
             case GatewayResult.Declined _ -> "declined";
             case GatewayResult.Failed _ -> "failed";
+        };
+    }
+
+    /** The counter label for a refund answer. */
+    public static String outcomeOf(RefundResult result) {
+        return switch (result) {
+            case RefundResult.Refunded _ -> "refunded";
+            case RefundResult.Failed _ -> "failed";
         };
     }
 }

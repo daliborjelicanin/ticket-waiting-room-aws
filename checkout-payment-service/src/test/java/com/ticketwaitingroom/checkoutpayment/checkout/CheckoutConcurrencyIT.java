@@ -9,9 +9,15 @@ import com.ticketwaitingroom.checkoutpayment.payment.Payment;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentGateway;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentRepository;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentStatus;
+import com.ticketwaitingroom.checkoutpayment.payment.Refund;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundOutcome;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundRepository;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundStatus;
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
 import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
+import com.ticketwaitingroom.common.exceptions.OrderNotRefundableException;
+import com.ticketwaitingroom.common.exceptions.RefundInProgressException;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -71,6 +77,8 @@ class CheckoutConcurrencyIT {
     private PaymentRepository paymentRepository;
     @Autowired
     private PaymentGateway paymentGateway;
+    @Autowired
+    private RefundRepository refundRepository;
     @Autowired
     private MeterRegistry meterRegistry;
 
@@ -232,6 +240,103 @@ class CheckoutConcurrencyIT {
     }
 
     @Test
+    void concurrentRefundsWithDifferentKeysReturnTheMoneyExactlyOnce() throws InterruptedException {
+        Order order = aPaidOrder(MockPaymentGateway.TOKEN_OK);
+        int attempts = 50;
+        int before = gateway.distinctRefunds();
+        AtomicInteger refunded = new AtomicInteger();
+        AtomicInteger rejected = new AtomicInteger();
+
+        // Distinct keys, so nothing de-duplicates at the key level: only
+        // ux_refunds_one_live_per_payment stands between this and fifty refunds of one charge.
+        race(attempts, i -> {
+            try {
+                RefundOutcome outcome = checkoutService.refund(
+                        order.getId(), "refund-" + order.getId() + "-" + i, "seat_not_confirmed");
+                if (outcome.refund().isSucceeded()) {
+                    refunded.incrementAndGet();
+                }
+            } catch (RefundInProgressException | OrderNotRefundableException lost) {
+                rejected.incrementAndGet();
+            }
+        });
+
+        assertThat(refunded).as("exactly one refund succeeds").hasValue(1);
+        assertThat(rejected).hasValue(attempts - 1);
+        assertThat(gateway.distinctRefunds() - before)
+                .as("the gateway is asked to return money exactly once")
+                .isEqualTo(1);
+        List<Refund> refunds = refundRepository.findByOrderIdOrderByCreatedAtAsc(order.getId());
+        assertThat(refunds).hasSize(1);
+        assertThat(refunds.getFirst().getAmountCents()).as("a full refund").isEqualTo(4500);
+        assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus()).isEqualTo(OrderStatus.REFUNDED);
+    }
+
+    @Test
+    void concurrentRetriesOfOneRefundKeyRefundOnceAndAgreeOnTheResult() throws InterruptedException {
+        Order order = aPaidOrder(MockPaymentGateway.TOKEN_OK);
+        String sharedKey = "pay-" + order.getId() + ":refund";
+        int before = gateway.distinctRefunds();
+        Queue<String> refs = new ConcurrentLinkedQueue<>();
+        AtomicInteger inFlight = new AtomicInteger();
+
+        // The saga retrying RefundPayment: one key, many deliveries.
+        race(50, i -> {
+            try {
+                refs.add(checkoutService.refund(order.getId(), sharedKey, "seat_not_confirmed")
+                        .refund().getGatewayRef());
+            } catch (RefundInProgressException stillRunning) {
+                inFlight.incrementAndGet();
+            }
+        });
+
+        assertThat(gateway.distinctRefunds() - before).isEqualTo(1);
+        assertThat(refundRepository.findByOrderIdOrderByCreatedAtAsc(order.getId())).hasSize(1);
+        assertThat(Set.copyOf(refs)).as("every answer is the same answer").hasSize(1);
+        assertThat(refs.size() + inFlight.get()).isEqualTo(50);
+    }
+
+    @Test
+    void aReplayedRefundReturnsTheOriginalAnswerAfterTheOrderIsRefunded() {
+        Order order = aPaidOrder(MockPaymentGateway.TOKEN_OK);
+        String key = "replay-refund-" + order.getId();
+        RefundOutcome first = checkoutService.refund(order.getId(), key, "seat_not_confirmed");
+
+        // Key before state: the order is REFUNDED now, and a retry must not be told
+        // "not refundable" about the refund it just made.
+        RefundOutcome replay = checkoutService.refund(order.getId(), key, "seat_not_confirmed");
+
+        assertThat(replay.refund().getId()).isEqualTo(first.refund().getId());
+        assertThat(replay.order().getStatus()).isEqualTo(OrderStatus.REFUNDED);
+    }
+
+    @Test
+    void onlyAPaidOrderCanBeRefunded() {
+        Order pending = anOrder();
+        assertThatThrownBy(() -> checkoutService.refund(pending.getId(), "r-" + pending.getId(), "seat_not_confirmed"))
+                .isInstanceOf(OrderNotRefundableException.class);
+
+        Order declined = anOrder();
+        checkoutService.charge(declined.getId(), "declined-" + declined.getId(), MockPaymentGateway.TOKEN_DECLINE);
+        assertThatThrownBy(() -> checkoutService.refund(declined.getId(), "r-" + declined.getId(), "seat_not_confirmed"))
+                .as("no money moved, so there is nothing to give back")
+                .isInstanceOf(OrderNotRefundableException.class);
+    }
+
+    @Test
+    void aFailedRefundLeavesTheOrderPaidBecauseTheMoneyIsStillTaken() {
+        Order order = aPaidOrder(MockPaymentGateway.TOKEN_REFUND_ERROR);
+
+        RefundOutcome outcome = checkoutService.refund(order.getId(), "fails-" + order.getId(), "seat_not_confirmed");
+
+        assertThat(outcome.refund().getStatus()).isEqualTo(RefundStatus.FAILED);
+        assertThat(outcome.refund().getFailureReason()).isEqualTo("gateway_unavailable");
+        assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus())
+                .as("PAID, not REFUNDED: the saga reads this as RefundFailed and a human takes over")
+                .isEqualTo(OrderStatus.PAID);
+    }
+
+    @Test
     void creatingAnOrderIsIdempotent() {
         String key = "order-key-" + UUID.randomUUID();
 
@@ -269,6 +374,12 @@ class CheckoutConcurrencyIT {
         assertThat(checkoutService.findOrder(order.getId(), CUSTOMER).getStatus())
                 .as("and the owner is unaffected")
                 .isEqualTo(OrderStatus.PENDING);
+    }
+
+    private Order aPaidOrder(String token) {
+        Order order = anOrder();
+        checkoutService.charge(order.getId(), "pay-" + order.getId(), token);
+        return order;
     }
 
     private Order anOrder() {

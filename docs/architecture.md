@@ -210,8 +210,9 @@ sequenceDiagram
 ## 3. The checkout saga
 
 Straight from `checkout-saga.asl.json`. The shape worth reading is the **right-hand
-side**: there are five distinct failure states, because what compensation means changes
-the instant money moves.
+side**: there are seven distinct failure states, because what compensation means changes
+the instant money moves. Before the capture it is a hold release; after it, a refund
+followed by a release.
 
 ```mermaid
 stateDiagram-v2
@@ -229,8 +230,15 @@ stateDiagram-v2
     PaymentCaptured --> ConfirmPurchase: paymentStatus = CAPTURED
     PaymentCaptured --> ReleaseSeat: declined
 
-    ConfirmPurchase --> EnqueueTicketIssuance: seat SOLD
-    ConfirmPurchase --> PaidButNotConfirmed: catch
+    ConfirmPurchase --> EnqueueTicketIssuance: seat SOLD (or already SOLD to this hold)
+    ConfirmPurchase --> RefundPayment: 404, no retry
+    ConfirmPurchase --> PaidButNotConfirmed: any other failure, after retries
+
+    RefundPayment --> RefundSucceeded: retry x4, then choice
+    RefundPayment --> RefundFailed: catch
+    RefundSucceeded --> ReleaseSeatAfterRefund: refundStatus = SUCCEEDED
+    RefundSucceeded --> RefundFailed: FAILED
+    ReleaseSeatAfterRefund --> PurchaseRefunded: released, or 404 (best effort)
 
     EnqueueTicketIssuance --> NotifyPurchaseConfirmed: message on queue
     EnqueueTicketIssuance --> PaidButNotIssued: catch
@@ -246,6 +254,8 @@ stateDiagram-v2
     CompensationFailed --> [*]
     PaidButNotConfirmed --> [*]
     PaidButNotIssued --> [*]
+    PurchaseRefunded --> [*]
+    RefundFailed --> [*]
 ```
 
 Three details that are easy to get wrong and are deliberate here:
@@ -253,9 +263,17 @@ Three details that are easy to get wrong and are deliberate here:
 - **A declined card is HTTP 200.** Compensation therefore hangs off the `PaymentCaptured`
   **Choice**, not off a `Catch`. `Catch` handles transport failures only — a `Catch`-based
   design would leave every decline running happily into ticket issuance.
-- **After the capture there is no release path.** `PaidButNotConfirmed` and
-  `PaidButNotIssued` both stop rather than compensate, because the compensating action
-  for money that already moved is a refund, and releasing the seat would sell it twice.
+- **After the capture, the compensation is a refund, and only on a definite answer.** A
+  404 from `ConfirmPurchase` means the hold expired or was lost, and the seat is not this
+  order's. That answer is trustworthy only because the confirm is idempotent: a retry
+  whose predecessor committed gets 200, not 404 (§4). Before that change, a lost response
+  turned a sold seat into a 404, and refunding on it would have handed out the seat for
+  free. Only on a definite 404 does the saga refund the full capture and then release the
+  hold. A timeout or 5xx after the retries still stops at `PaidButNotConfirmed`, because
+  then nobody knows whether the seat sold. `PaidButNotIssued` stops too: the seat *is*
+  sold, so the repair is a replay of the enqueue, never a refund.
+- **`RefundFailed` is money still taken.** The order stays PAID beside a FAILED refund row,
+  and the counter `checkout.refunds{outcome=failed}` is what makes it visible.
 - **`CompensationFailed` is not a dead end in practice.** The hold's TTL and
   `hold-cleanup-lambda` are the backstop that returns the seat regardless.
 
@@ -275,6 +293,7 @@ stateDiagram-v2
     HELD --> AVAILABLE: release<br/>if HELD and holdId matches
     HELD --> AVAILABLE: cleanup lambda<br/>if HELD and holdId matches and expired
     HELD --> SOLD: purchase<br/>if HELD and holdId matches and NOT expired
+    SOLD --> SOLD: purchase replayed<br/>condition fails, ALL_OLD shows<br/>SOLD under the same holdId → 200, no write
 
     SOLD --> [*]
 
@@ -411,7 +430,7 @@ not a security one.
 
 ## 7. Telemetry
 
-Built in code, not yet run on AWS (slice 7). Every Fargate service exports traces and
+Built and run on AWS in slice 7 (`runbook-observability.md`). Every Fargate service exports traces and
 metrics over OTLP to a collector on its own task's loopback — the ADOT collector as a
 sidecar — which forwards to X-Ray and CloudWatch. Nothing in a service knows the backend.
 The `X-Amzn-Trace-Id` header API Gateway and the ALB stamp on a request is joined, the
@@ -419,6 +438,14 @@ AWS SDK interceptor writes the trace into every SQS message, and the consumers o
 span under it, so a purchase is one trace from the edge through the saga, the queue and
 the issuance insert. The meters, and why each one, are in
 [`observability-starter/ARCHITECTURE.md`](../observability-starter/ARCHITECTURE.md).
+
+On AWS (2026-09-15) one purchase was one trace of 18 segments: the `ticket-edge` stage, the
+saga's four `http:invoke` calls back through it, the `DynamoDB UpdateItem` subsegments, and
+both SQS consumer spans. Two gaps remain, both listed in `phase1-retro.md` §7. Step
+Functions emits no segment of its own, although the header passes through it. The QR
+Lambda shows up as a separate linked trace, which is how Lambda handles SQS triggers. The
+metrics feed the `ticket-waiting-room` dashboard, whose source is
+`docs/dashboard-ticket-waiting-room.json`.
 
 ```mermaid
 flowchart LR
@@ -428,9 +455,7 @@ flowchart LR
     end
     SVC -->|"AWSTraceHeader on SendMessage"| Q[("SQS")] --> CONS["consumer<br/>span under the producer's trace"]
     ADOT --> XR["X-Ray"]
-    ADOT --> CW["CloudWatch<br/>metrics via EMF"]
-    classDef planned stroke-dasharray:5 4;
-    class ADOT,XR,CW planned;
+    ADOT --> CW["CloudWatch<br/>metrics via EMF"] --> DB["dashboard<br/>ticket-waiting-room"]
 ```
 
 ## 8. Build status by slice
@@ -442,14 +467,13 @@ flowchart LR
     S2 --> S3["3 · waiting room<br/>ElastiCache Redis"]
     S3 --> S4["4 · checkout saga<br/>Step Functions + RDS + SQS"]
     S4 --> S5["5 · issuance + notification<br/>SQS, S3, SNS, SES"]
-    S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket done<br/>Cognito + WAF done · optional frontend open"]
-    S6 --> S7["7 · observability<br/>instrumentation in code done<br/>collector, dashboard, X-Ray, load test pending"]
-    S7 --> S8["8 · wrap-up"]
+    S5 --> S6["6 · edge & auth<br/>ALB + APIGW + WebSocket<br/>Cognito + WAF"]
+    S6 --> S7["7 · observability + proof<br/>ADOT, X-Ray, dashboard<br/>load test: 0 double-sold"]
+    S7 --> S8["8 · wrap-up<br/>README, sweep, retro"]
+    S8 --> P2["Phase 2 · Terraform<br/>from phase1-retro.md"]
 
     classDef done fill:#2f6f4f,stroke:#1d4632,color:#fff;
-    classDef partial fill:#7a5c1e,stroke:#4d3a13,color:#fff;
     classDef todo stroke-dasharray:5 4;
-    class S0,S1,S2,S3,S4,S5 done;
-    class S6,S7 partial;
-    class S8 todo;
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8 done;
+    class P2 todo;
 ```

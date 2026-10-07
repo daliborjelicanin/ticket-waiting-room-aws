@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
+import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure;
 import software.amazon.awssdk.services.dynamodb.model.Select;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 
@@ -154,12 +155,26 @@ public class SeatRepository {
      * so without it an expired-but-not-yet-deleted hold could still be confirmed.
      *
      * <p>Removes {@code holdExpiresAt} so the TTL can never delete a SOLD seat;
-     * {@code holdId} is kept as the audit trail of the winning hold.
+     * {@code holdId} is kept as the audit trail of the winning hold — and that audit trail
+     * is also what makes this call idempotent.
      *
+     * <p><b>Idempotent on the winning hold.</b> The saga retries this call, and a retry
+     * whose predecessor committed but lost its response would otherwise find the seat SOLD,
+     * fail the condition, and report "not yours" for a seat it had just bought. The saga
+     * refunds on that answer, so a lost response would have handed the buyer the seat
+     * <em>and</em> their money back. When the condition fails, DynamoDB returns the item as
+     * it stood ({@code ALL_OLD}, no second read). SOLD under this same {@code holdId} is
+     * therefore a replay. SOLD is terminal and the hold id is never reused, so that answer
+     * cannot go stale. Any other state is a definite refusal, and the saga is entitled
+     * to refund on it.
+     *
+     * @return {@code true} if this call sold the seat, {@code false} if an earlier call
+     *         with the same {@code holdId} already had
      * @throws HoldNotFoundException if the seat is not HELD under this {@code holdId},
-     *                               or the hold has expired
+     *                               or the hold has expired, and was not already sold
+     *                               under it
      */
-    public void confirmPurchase(String eventId, String seatId, String holdId, Instant now) {
+    public boolean confirmPurchase(String eventId, String seatId, String holdId, Instant now) {
         try {
             dynamo.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
@@ -177,11 +192,22 @@ public class SeatRepository {
                             ":held", s(SeatStatus.HELD.name()),
                             ":holdId", s(holdId),
                             ":now", n(now.getEpochSecond())))
+                    .returnValuesOnConditionCheckFailure(ReturnValuesOnConditionCheckFailure.ALL_OLD)
                     .build());
+            return true;
         } catch (ConditionalCheckFailedException e) {
+            if (isSoldUnder(e.item(), holdId)) {
+                return false;
+            }
             throw new HoldNotFoundException(
                     "No active hold " + holdId + " on seat " + seatId + " of event " + eventId);
         }
+    }
+
+    private static boolean isSoldUnder(Map<String, AttributeValue> item, String holdId) {
+        return item != null
+                && item.containsKey(ATTR_STATUS) && SeatStatus.SOLD.name().equals(item.get(ATTR_STATUS).s())
+                && item.containsKey(ATTR_HOLD_ID) && holdId.equals(item.get(ATTR_HOLD_ID).s());
     }
 
     /** Read a seat, or {@code null} if it does not exist. */

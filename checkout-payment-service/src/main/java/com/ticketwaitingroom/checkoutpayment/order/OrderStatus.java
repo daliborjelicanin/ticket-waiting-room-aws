@@ -1,9 +1,10 @@
 package com.ticketwaitingroom.checkoutpayment.order;
 
 /**
- * Lifecycle of an order. Terminal states are {@link #PAID}, {@link #FAILED} and
- * {@link #CANCELLED} — the saga's compensating action (releasing the seat holds) is
- * driven by an order reaching FAILED or CANCELLED, never by PENDING.
+ * Lifecycle of an order. Terminal states are {@link #FAILED}, {@link #CANCELLED} and
+ * {@link #REFUNDED}; {@link #PAID} is terminal unless the seat cannot be confirmed. The
+ * saga's compensating action is a hold release before money moves (FAILED, CANCELLED) and a
+ * refund after it (PAID → REFUNDED), never the other way round.
  */
 public enum OrderStatus {
 
@@ -17,5 +18,11 @@ public enum OrderStatus {
     FAILED,
 
     /** Abandoned before payment. The seat holds must be released. */
-    CANCELLED
+    CANCELLED,
+
+    /**
+     * Paid, then refunded because the seat could not be confirmed as sold to this order.
+     * Only ever reached from PAID.
+     */
+    REFUNDED
 }

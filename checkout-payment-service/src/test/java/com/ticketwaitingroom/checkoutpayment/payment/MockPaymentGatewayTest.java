@@ -106,6 +106,37 @@ class MockPaymentGatewayTest {
                 .isInstanceOf(GatewayResult.Approved.class);
     }
 
+    @Test
+    void aRefundOfAnApprovedChargeSucceedsOnceHoweverOftenItIsRetried() {
+        String chargeRef = ((GatewayResult.Approved) charge("k1", MockPaymentGateway.TOKEN_OK)).gatewayRef();
+
+        RefundResult first = refund("r1", chargeRef);
+        RefundResult retry = refund("r1", chargeRef);
+
+        assertThat(first).isInstanceOfSatisfying(RefundResult.Refunded.class,
+                refunded -> assertThat(refunded.gatewayRef()).startsWith("mock_refund_"));
+        assertThat(retry).as("a retried key replays, it does not refund again").isEqualTo(first);
+        assertThat(gateway.distinctRefunds()).isEqualTo(1);
+    }
+
+    @Test
+    void theRefundErrorTokenApprovesTheChargeAndFailsItsRefund() {
+        GatewayResult charged = charge("k1", MockPaymentGateway.TOKEN_REFUND_ERROR);
+        assertThat(charged).isInstanceOf(GatewayResult.Approved.class);
+
+        assertThat(refund("r1", ((GatewayResult.Approved) charged).gatewayRef()))
+                .isEqualTo(new RefundResult.Failed("gateway_unavailable"));
+    }
+
+    @Test
+    void aRefundOfAChargeTheGatewayNeverMadeFails() {
+        assertThat(refund("r1", "mock_never_issued")).isEqualTo(new RefundResult.Failed("unknown_charge"));
+    }
+
+    private RefundResult refund(String idempotencyKey, String chargeRef) {
+        return gateway.refund(new GatewayRefund(idempotencyKey, chargeRef, 4500, "EUR"));
+    }
+
     private GatewayResult charge(String idempotencyKey, String token) {
         return gateway.charge(new GatewayCharge(idempotencyKey, token, 4500, "EUR"));
     }

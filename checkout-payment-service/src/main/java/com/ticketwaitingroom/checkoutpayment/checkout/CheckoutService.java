@@ -7,14 +7,22 @@ import com.ticketwaitingroom.checkoutpayment.order.OrderSeat;
 import com.ticketwaitingroom.checkoutpayment.payment.AttemptClaim;
 import com.ticketwaitingroom.checkoutpayment.payment.ChargeOutcome;
 import com.ticketwaitingroom.checkoutpayment.payment.GatewayCharge;
+import com.ticketwaitingroom.checkoutpayment.payment.GatewayRefund;
 import com.ticketwaitingroom.checkoutpayment.payment.GatewayResult;
 import com.ticketwaitingroom.checkoutpayment.payment.Payment;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentGateway;
 import com.ticketwaitingroom.checkoutpayment.payment.PaymentService;
+import com.ticketwaitingroom.checkoutpayment.payment.Refund;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundClaim;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundOutcome;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundResult;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundService;
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
 import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotFoundException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
+import com.ticketwaitingroom.common.exceptions.OrderNotRefundableException;
+import com.ticketwaitingroom.common.exceptions.RefundInProgressException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -25,7 +33,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The checkout step of the saga: create an order for seats already held, then charge it.
+ * The checkout steps of the saga: create an order for seats already held, charge it, and,
+ * if the seat cannot then be confirmed, refund it.
  *
  * <p>{@link #charge} is intentionally <em>not</em> transactional. It spans a call to an
  * external gateway, and holding a database transaction across that would trade a payment
@@ -39,6 +48,7 @@ public class CheckoutService {
 
     private final OrderRepository orderRepository;
     private final PaymentService paymentService;
+    private final RefundService refundService;
     private final PaymentGateway paymentGateway;
     private final CheckoutProperties properties;
     private final CheckoutMetrics metrics;
@@ -121,6 +131,54 @@ public class CheckoutService {
                         idempotencyKey, paymentToken, attempt.getAmountCents(), attempt.getCurrency())));
                 ChargeOutcome outcome = paymentService.completeAttempt(attempt.getId(), result, clock.instant());
                 metrics.charged(CheckoutMetrics.outcomeOf(result));
+                yield outcome;
+            }
+        };
+    }
+
+    /**
+     * Refund a paid order: claim the refund, call the gateway, record what it said.
+     *
+     * <p>The saga's compensation after money has moved. It calls this only when the seat
+     * inventory has <em>definitively</em> refused the confirm (a 404 from an idempotent
+     * confirm), never on a timeout, because a timeout cannot tell a sold seat from an
+     * unsold one. The structure is the charge's, with the same claim-before-call ordering
+     * and the same key-before-state check, so a replay of a refund that has already been
+     * decided returns its original answer.
+     */
+    public RefundOutcome refund(UUID orderId, String idempotencyKey, String reason) {
+        try {
+            return refundCounted(orderId, idempotencyKey, reason);
+        } catch (RefundInProgressException inFlight) {
+            metrics.refunded("in_flight");
+            throw inFlight;
+        } catch (OrderNotRefundableException notPaid) {
+            metrics.refunded("not_refundable");
+            throw notPaid;
+        }
+    }
+
+    private RefundOutcome refundCounted(UUID orderId, String idempotencyKey, String reason) {
+        RefundClaim claim;
+        try {
+            claim = refundService.beginRefund(orderId, idempotencyKey, reason, clock.instant());
+        } catch (DataIntegrityViolationException conflict) {
+            RefundOutcome replayed = refundService.resolveConflict(orderId, idempotencyKey, conflict);
+            metrics.refunded("replayed");
+            return replayed;
+        }
+
+        return switch (claim) {
+            case RefundClaim.AlreadySettled settled -> {
+                metrics.refunded("replayed");
+                yield settled.outcome();
+            }
+            case RefundClaim.Claimed claimed -> {
+                Refund attempt = claimed.refund();
+                RefundResult result = paymentGateway.refund(new GatewayRefund(
+                        idempotencyKey, claimed.chargeRef(), attempt.getAmountCents(), attempt.getCurrency()));
+                RefundOutcome outcome = refundService.completeRefund(attempt.getId(), result, clock.instant());
+                metrics.refunded(CheckoutMetrics.outcomeOf(result));
                 yield outcome;
             }
         };

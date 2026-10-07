@@ -7,10 +7,14 @@ import com.ticketwaitingroom.checkoutpayment.order.OrderSeat;
 import com.ticketwaitingroom.checkoutpayment.payment.ChargeOutcome;
 import com.ticketwaitingroom.checkoutpayment.payment.GatewayResult;
 import com.ticketwaitingroom.checkoutpayment.payment.Payment;
+import com.ticketwaitingroom.checkoutpayment.payment.Refund;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundOutcome;
+import com.ticketwaitingroom.checkoutpayment.payment.RefundResult;
 import com.ticketwaitingroom.common.exceptions.ChargeInProgressException;
 import com.ticketwaitingroom.common.exceptions.NotYoursException;
 import com.ticketwaitingroom.common.exceptions.OrderNotFoundException;
 import com.ticketwaitingroom.common.exceptions.OrderNotPayableException;
+import com.ticketwaitingroom.common.exceptions.OrderNotRefundableException;
 import com.ticketwaitingroom.common.identity.TicketingScopes;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -167,8 +171,48 @@ class CheckoutControllerTest {
                         .content("{}"))
                 .andExpect(status().isForbidden());
 
+        mockMvc.perform(post("/orders/{orderId}/refund", UUID.randomUUID()).with(customer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
         verify(checkoutService, never()).createOrder(any(), any(), any(), anyLong(), any(), any());
         verify(checkoutService, never()).charge(any(), any(), any());
+        verify(checkoutService, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void refundReturnsTheRefundedOrder() throws Exception {
+        Order order = anOrder();
+        Payment payment = aPayment(order.getId());
+        payment.complete(new GatewayResult.Approved("mock_ref"), NOW);
+        order.markPaid(NOW);
+        Refund refund = Refund.pending(order.getId(), payment, "seat_not_confirmed", "pay-1:refund", NOW);
+        refund.complete(new RefundResult.Refunded("mock_refund_1"), NOW);
+        order.markRefunded(NOW);
+        when(checkoutService.refund(order.getId(), "pay-1:refund", "seat_not_confirmed"))
+                .thenReturn(new RefundOutcome(order, refund));
+
+        mockMvc.perform(post("/orders/{orderId}/refund", order.getId()).with(saga())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"idempotencyKey\":\"pay-1:refund\",\"reason\":\"seat_not_confirmed\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderStatus").value("REFUNDED"))
+                .andExpect(jsonPath("$.refundStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.gatewayRef").value("mock_refund_1"));
+    }
+
+    @Test
+    void refundingAnUnpaidOrderIs409() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(checkoutService.refund(any(), anyString(), anyString()))
+                .thenThrow(new OrderNotRefundableException("Order " + id + " is PENDING and has nothing to refund"));
+
+        mockMvc.perform(post("/orders/{orderId}/refund", id).with(saga())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"idempotencyKey\":\"r-1\",\"reason\":\"seat_not_confirmed\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Order not refundable"));
     }
 
     @Test

@@ -75,7 +75,7 @@ against every writer — including ones that do not exist yet.
 | **First in, first admitted** | Redis sorted set scored by an `INCR` ticket number (wall-clock scores tie and fall back to ordering by token UUID), `ZPOPMIN` admission, one place per identity via `HSETNX` — each operation a single Lua script | `WaitingRoomFairnessIT`: 100 concurrent joins → 100 distinct contiguous places, admission order = join order | same result on ElastiCache over a real network; 50 identities joining 50× each → 50 places |
 | **An order is charged once** | Postgres: unique idempotency key on orders and payments, and the partial unique index `ux_payments_one_live_per_order` allowing one PENDING-or-CAPTURED payment per order. The gateway is called *between* two transactions, never inside one | `CheckoutConcurrencyIT`: 50 charges with distinct keys → 1 CAPTURED, gateway invoked once | 50 concurrent charges → 1×200, 49×409, exactly one CAPTURED row (slice 4) |
 | **A ticket is issued once, however many times the message arrives** | `UNIQUE (order_id, seat_id)` on `tickets`; the SQS consumer deletes only after the handler returns, so redelivery is ordinary and the constraint absorbs it | `TicketIssuanceIT`: 20 concurrent deliveries → 1 ticket | 21 duplicate deliveries, 20 in two concurrent batches → 1 ticket, `issued_at` unchanged (slice 5) |
-| **Checkout never strands a seat** | Step Functions saga with explicit compensation: a declined payment is HTTP 200, so compensation hangs off a `Choice`, not a `Catch`; five distinct failure states because after capture the compensation is a refund, not a release | contract tests pin the saga's field names to the records | happy path SOLD; declined → seat AVAILABLE, order FAILED, nothing enqueued (slice 4); 40 concurrent losers → all `SeatUnavailable` (load test) |
+| **Checkout never strands a seat, or keeps money for one it could not sell** | Step Functions saga with explicit compensation: a declined payment is HTTP 200, so compensation hangs off a `Choice`, not a `Catch`. After capture the compensation is a full refund, taken only when the seat inventory definitively refuses the confirm. The confirm is idempotent on the winning hold, so a lost response can never look like a refusal. A partial unique index allows one live refund per payment. Seven distinct failure states | contract tests pin the saga's field names and its 404-only refund route to the records; 100 concurrent confirms of one hold → 1 write, 99 replays; 50 concurrent refunds → 1 SUCCEEDED, gateway asked once | happy path SOLD; declined → seat AVAILABLE, order FAILED, nothing enqueued (slice 4); 40 concurrent losers → all `SeatUnavailable` (load test); the refund path is proven locally and **not yet run on AWS** |
 | **A QR is rendered once per ticket, by construction** | S3 key derived from the ticket id, pure renderer — a redelivery rewrites identical bytes, no guard needed | `QrGenerationIT` | slice 5 |
 
 The full argument for each is in the module's `ARCHITECTURE.md`; the key design decisions
@@ -109,15 +109,19 @@ Every AWS service earns its place by solving a concrete problem; none is here fo
 The rule was *nothing runs while I am not working on it*: every session ends with a
 teardown checklist and a tag sweep, and the demo is re-creatable rather than standing.
 
-- **Standing cost while idle: ≈ $0.07/month** — ECR past the free tier. DynamoDB, SQS, SNS,
-  Lambda, Step Functions, Cognito, task definitions, log groups at 1-day retention: $0.
+- **Standing cost while idle: ≈ $0.07/month** — ECR past the free tier, with one image per
+  repository (≈ $0.16 while the superseded images from before the load-test rebuild remain).
+  DynamoDB, SQS, SNS, Lambda, Step Functions, Cognito, task definitions, log groups at 1-day
+  retention: $0. The final account sweep found nothing billing by the hour
+  ([`docs/runbook-teardown-sweep.md`](docs/runbook-teardown-sweep.md)).
 - **A full-stack session** (ALB, RDS `db.t4g.micro`, ElastiCache `cache.t4g.micro`, five
   Fargate Spot tasks, the collector sidecars): **≈ $0.10–0.15 per hour**. The load-test
   session was 37 minutes and ≈ $0.09; the Cognito session ≈ $0.15; the observability
   bring-up ≈ $0.05.
 - **The expensive things to forget**: an ALB (~$27/month), a WAF web ACL with Bot Control
   (~$17/month). Both are session-only and the runbooks say so in the first paragraph.
-- Whole of Phase 1 to date: **under $5** against a $10/month budget alarm.
+- Whole of Phase 1: **under $5** against a $10/month budget alert (September
+  was $0.96 including tax).
 
 Prices were read from the pricing pages or the Price List API at the time of each slice
 and are recorded in the runbooks' *What It Cost* sections.
@@ -133,11 +137,12 @@ and are recorded in the runbooks' *What It Cost* sections.
 | `observability-starter` | actuator health, OTLP export, what X-Ray needs that Boot does not know, consumer spans across SQS |
 | `docs/` | `architecture.md`, `phase1-plan.md`, one runbook per AWS slice with decisions, console steps, results, traps, teardown |
 | `load-test/` | the k6 scenarios, the test-user and token scripts, the invariant check |
+| `scripts/teardown-sweep.sh` | the read-only account sweep run after every session; exits 1 if anything bills by the hour |
 
 ## Building and running
 
 ```bash
-./gradlew build                                   # every module, 151 tests, Testcontainers ITs included
+./gradlew build                                   # every module, 167 tests, Testcontainers ITs included
 ./gradlew :seat-inventory-service:bootRun         # a service locally: no AWS needed for the waiting room
                                                   # (logging publisher) or the notification service (logging sender)
 ./gradlew :hold-cleanup-lambda:build              # stages a Lambda's deployment package for its Dockerfile
@@ -163,6 +168,8 @@ Phase 1 optimised for learning depth and near-zero cost, and says so where it cu
 - **No frontend.** The optional CloudFront + S3 page was left out: the proof is the API.
 
 **Phase 2** rebuilds the same architecture in Terraform, starting with the network, and adds
-GitHub Actions with OIDC. **Phase 3** re-platforms it onto EKS, where the OTLP sidecar
-becomes a DaemonSet and nothing in a service changes. The plan, with every checkbox and
+GitHub Actions with OIDC. What Phase 1 taught that Terraform needs (the stack split, the
+values every rebuild minted, the defaults that failed silently, and the decisions to make
+first) is in [`docs/phase1-retro.md`](docs/phase1-retro.md). **Phase 3** re-platforms it
+onto EKS, where the OTLP sidecar becomes a DaemonSet and nothing in a service changes. The plan, with every checkbox and
 what each session found, is [`docs/phase1-plan.md`](docs/phase1-plan.md).

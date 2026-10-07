@@ -1,5 +1,5 @@
 {
-  "Comment": "Checkout saga: hold seat -> create order -> charge -> confirm -> enqueue issuance -> notify, with seat release as compensation. JSONata query language.",
+  "Comment": "Checkout saga: hold seat -> create order -> charge -> confirm -> enqueue issuance -> notify. Compensation is a seat release before money moves and a refund (then release) after. JSONata query language.",
   "QueryLanguage": "JSONata",
   "StartAt": "HoldSeat",
   "States": {
@@ -85,14 +85,74 @@
         "Headers": { "Content-Type": "application/json" },
         "RequestBody": { "holdId": "{% $holdId %}" }
       },
+      "Retry": [
+        { "ErrorEquals": ["States.Http.StatusCode.404"], "MaxAttempts": 0 },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 4,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.Http.StatusCode.404"], "Next": "RefundPayment" },
+        { "ErrorEquals": ["States.ALL"], "Next": "PaidButNotConfirmed" }
+      ],
+      "Next": "EnqueueTicketIssuance"
+    },
+
+    "RefundPayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.checkoutBaseUrl & '/orders/' & $orderId & '/refund' %}",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" },
+        "Headers": { "Content-Type": "application/json" },
+        "RequestBody": {
+          "idempotencyKey": "{% $req.paymentKey & ':refund' %}",
+          "reason": "seat_not_confirmed"
+        }
+      },
+      "Assign": { "refund": "{% $states.result.ResponseBody %}" },
       "Retry": [{
         "ErrorEquals": ["States.ALL"],
         "IntervalSeconds": 2,
         "MaxAttempts": 4,
         "BackoffRate": 2.0
       }],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PaidButNotConfirmed" }],
-      "Next": "EnqueueTicketIssuance"
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RefundFailed" }],
+      "Next": "RefundSucceeded"
+    },
+
+    "RefundSucceeded": {
+      "Type": "Choice",
+      "Choices": [{
+        "Condition": "{% $refund.refundStatus = 'SUCCEEDED' %}",
+        "Next": "ReleaseSeatAfterRefund"
+      }],
+      "Default": "RefundFailed"
+    },
+
+    "ReleaseSeatAfterRefund": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $req.inventoryBaseUrl & '/events/' & $req.eventId & '/seats/' & $req.seatId & '/hold/' & $holdId %}",
+        "Method": "DELETE",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" }
+      },
+      "Retry": [
+        { "ErrorEquals": ["States.Http.StatusCode.404"], "MaxAttempts": 0 },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 4,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "PurchaseRefunded" }],
+      "Next": "PurchaseRefunded"
     },
 
     "EnqueueTicketIssuance": {
@@ -184,7 +244,19 @@
     "PaidButNotConfirmed": {
       "Type": "Fail",
       "Error": "PaidButNotConfirmed",
-      "Cause": "Money moved but the seat was not marked SOLD. Do NOT release the seat - the compensating action here is a refund, not a release."
+      "Cause": "Money moved and the seat inventory never answered the confirm definitively (timeouts or 5xx after retries), so the seat may be SOLD to this order. Read the seat: SOLD under this holdId means resume at EnqueueTicketIssuance; anything else means POST /orders/{orderId}/refund. Never release the seat blind."
+    },
+
+    "PurchaseRefunded": {
+      "Type": "Fail",
+      "Error": "PurchaseRefunded",
+      "Cause": "Payment was captured, the seat inventory definitively refused the confirm (the hold expired or was lost), and the payment has been refunded in full. The hold release that follows is best-effort; the TTL and the cleanup Lambda are its backstop."
+    },
+
+    "RefundFailed": {
+      "Type": "Fail",
+      "Error": "RefundFailed",
+      "Cause": "Money moved, the seat is definitively not this order's, and the refund did not complete. The order is still PAID with a FAILED or PENDING refund row: retry with POST /orders/{orderId}/refund under a new idempotency key."
     },
 
     "PaidButNotIssued": {

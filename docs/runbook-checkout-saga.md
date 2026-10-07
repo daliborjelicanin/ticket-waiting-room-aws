@@ -4,7 +4,9 @@ Slice 4's second half. The state machine definition lives beside this file in
 `checkout-saga.asl.json`; this runbook is how it gets built, wired and proven.
 
 The saga: **hold seat → create order → charge → confirm purchase → enqueue issuance →
-notify**, with **release seat** as the compensating action when payment does not capture.
+notify**, with **release seat** as the compensating action when payment does not capture,
+and **refund, then release** when it captured but the seat cannot be confirmed (added
+2026-10-07, see *The Refund Path*).
 
 ## Two Design Points That Shape Everything
 
@@ -22,17 +24,19 @@ and it would pass a happy-path test.
 
 ### Compensation stops being "release the seat" once money moves
 
-Before capture, the compensating action is a seat release. After capture it is a *refund*,
-which this project does not implement. So the failure states are deliberately not one
-generic `Fail`:
+Before capture, the compensating action is a seat release. After capture it is a
+*refund*, and only when the seat is definitively not this order's. So the failure states
+are deliberately not one generic `Fail`:
 
 | Failure state | Reached when | Correct action |
 |---|---|---|
 | `SeatUnavailable` | the hold itself failed | nothing to undo |
 | `PaymentFailed` | no capture, seat released | none — saga is clean |
 | `CompensationFailed` | no capture, release *also* failed | hold TTL + cleanup Lambda are the backstop |
-| `PaidButNotConfirmed` | captured, seat not marked SOLD | refund or manual confirm — **never** release |
-| `PaidButNotIssued` | captured and SOLD, enqueue failed | replay from issuance; do not re-charge |
+| `PurchaseRefunded` | captured, confirm **404** (hold expired or lost), refund SUCCEEDED, hold released best-effort | none: the customer has their money back |
+| `RefundFailed` | captured, confirm 404, refund FAILED or never answered | retry `POST /orders/{id}/refund` under a new key: money is still taken |
+| `PaidButNotConfirmed` | captured, confirm **timed out / 5xx** after retries: the seat may be SOLD | read the seat: SOLD under this `holdId` → resume issuance; otherwise refund. **Never** release blind |
+| `PaidButNotIssued` | captured and SOLD, enqueue failed | replay from issuance; do not re-charge, never refund |
 
 `CompensationFailed` is survivable precisely because slice 2 exists: the DynamoDB TTL and
 the EventBridge-scheduled cleanup Lambda reclaim the hold without anyone intervening. That
@@ -189,7 +193,7 @@ Three things that are easy to miss:
 
 | Placeholder | Replace with |
 |---|---|
-| `__CONNECTION_ARN__` | the `ticket-services` connection ARN (**5** occurrences) |
+| `__CONNECTION_ARN__` | the `ticket-services` connection ARN (**7** occurrences) |
 | `__QUEUE_URL__` | the `ticket-issuance-queue` URL |
 | `__TOPIC_ARN__` | the `purchase-confirmed` topic ARN |
 
@@ -223,10 +227,11 @@ test runs cost under a cent.
 - **`ReleaseSeat` retries harder than it catches.** A failed compensation is worse than a
   failed forward step, so it gets four attempts before conceding to `CompensationFailed`.
 
-> `States.ALL` in the `Retry` blocks is deliberately broad while the exact
-> `States.Http.StatusCode.*` error names are unconfirmed. Narrow them to the specific 5XX
-> names once a real failure shows the names in the execution history — retrying a `409`
-> is wasteful, though harmless given the idempotency key.
+> The error names are `States.Http.StatusCode.<code>`, confirmed against the HTTP Task
+> documentation (2026-10-07), which catches `States.Http.StatusCode.404` in its own example.
+> `ConfirmPurchase` and `ReleaseSeatAfterRefund` now route on the 404 specifically. The
+> other `Retry` blocks stay on `States.ALL`: retrying a `409` is wasteful but harmless with
+> an idempotency key, and narrowing them buys nothing a session would notice.
 
 ## Verify Both Paths
 
@@ -387,7 +392,7 @@ aws events delete-connection --name ticket-services --region eu-central-1
 ```
 
 Recreating it next session takes one command, but the ARN changes, so the state machine
-definition has to be re-pointed at the new one — all **5** occurrences:
+definition has to be re-pointed at the new one — all **7** occurrences:
 
 ```bash
 CONN=$(aws events create-connection --name ticket-services \
@@ -418,9 +423,79 @@ aws apigatewayv2 update-integration --api-id <id> --integration-id <int-id> \
 Also worth deleting if you rebuild: CloudWatch log group
 `/aws/vendedlogs/states/checkout-saga`, set to 1-day retention.
 
+## The Refund Path
+
+Added 2026-10-07, in code and tests. **It has not been run on AWS yet**: the steps below
+deploy and prove it in the next session that has the stack up.
+
+### Why it waited for a fix in seat inventory
+
+The refund could not be added on its own. `ConfirmPurchase` retries, and until this change
+the seat inventory's confirm was **not idempotent**: if the first attempt committed but its
+response was lost, the retry found the seat SOLD and got a 404. Refunding on that 404 would
+have given the buyer the seat *and* the money. So the confirm was fixed first: a failed
+condition returns the item as it stood (`ReturnValuesOnConditionCheckFailure = ALL_OLD`),
+and SOLD under the caller's own `holdId` is answered 200 (`seat-inventory-service/ARCHITECTURE.md`).
+After that, a 404 means one thing: this order does not own the seat, and it never will.
+
+### What the definition does now
+
+- `ConfirmPurchase` has two retriers and two catchers, in order. A
+  `States.Http.StatusCode.404` is **not retried** (`MaxAttempts: 0`, since retrying a
+  definite answer only delays the refund) and routes to `RefundPayment`. Everything else
+  retries four times and then stops at `PaidButNotConfirmed`, because a timeout cannot tell
+  a sold seat from an unsold one.
+- `RefundPayment` posts `{idempotencyKey: paymentKey + ":refund", reason}`. The key is fixed
+  per execution, so its retries replay rather than refund twice. In the database,
+  `ux_refunds_one_live_per_payment` makes a second live refund of the same payment
+  impossible whatever key it carries.
+- `RefundSucceeded` is a **Choice** on `refundStatus`, for the same reason
+  `PaymentCaptured` is: a failed refund is HTTP 200 with `refundStatus: FAILED`, and a
+  `Catch` would never see it.
+- `ReleaseSeatAfterRefund` frees the hold, best effort. A 404 there is the normal case (the
+  hold usually expired, which is why the confirm failed), and both outcomes end at
+  `PurchaseRefunded`.
+- `CheckoutSagaContractTest` pins the request bodies and Choice fields to the controller's
+  records, and pins the 404 route so it cannot quietly widen to `States.ALL`.
+
+### Deploy (next session)
+
+1. Rebuild and push **both** images: `seat-inventory-service` (idempotent confirm) and
+   `checkout-payment-service` (refund endpoint, Flyway **V2** runs at startup and adds the
+   `refunds` table plus the `REFUNDED` status). Register new task-definition revisions on
+   the new digests, as in `runbook-ecr-packaging.md`. **The order matters:** if
+   seat-inventory still runs the old image while the new saga is live, a lost confirm
+   response becomes a refund of a sold seat.
+2. Update the state machine with the substitution command under *Teardown* (now 7
+   occurrences of the connection ARN). No IAM change: `RefundPayment` is a POST to the same
+   `https://` host the role already allows.
+3. **Optional, recommended:** an alarm, because none exists in the account today. An
+   EventBridge rule on `aws.states` / `Step Functions Execution Status Change`, `status:
+   FAILED`, with `detail.error` in `RefundFailed`, `PaidButNotConfirmed`, `PaidButNotIssued`
+   and `CompensationFailed`, targeting a new SNS topic with one email subscription. These
+   are the four outcomes a human has to finish, and $0 at this volume. Check the event's
+   `detail` in the console's sample events before relying on the `error` field.
+
+### Verify
+
+Force the hold to expire while the payment is in flight: run seat-inventory with
+`SEAT_INVENTORY_HOLD_DURATION=PT10S` and checkout with `PAYMENT_GATEWAY_LATENCY=PT15S`, then
+purchase with `tok_ok`. Expected:
+
+- The execution history shows `ConfirmPurchase` failing **once** with
+  `States.Http.StatusCode.404`, with no retries, then `RefundPayment → RefundSucceeded →
+  ReleaseSeatAfterRefund → PurchaseRefunded`.
+- In Postgres: order `REFUNDED`, payment `CAPTURED`, one `refunds` row `SUCCEEDED` with
+  `amount_cents` equal to the payment's.
+- `load-test/scripts/invariants.sh` passes: it counts a refunded capture against a REFUNDED
+  order, not as money adrift.
+- Repeat with `tok_refund_error`: `RefundFailed`, order still `PAID`, refund `FAILED`,
+  `checkout.refunds{outcome=failed}` = 1 on the dashboard.
+
 ## Phase 2 Notes
 
 - The base URLs become one ALB hostname, and `states:HTTPEndpoint` narrows from `http://*`
   to that host.
 - The API-key connection becomes real authentication.
-- `PaidButNotConfirmed` wants a refund step to be a true saga; today it is an alarm.
+- The four "a human finishes this" Fail states get their EventBridge rule and SNS topic as
+  code (*The Refund Path*, step 3).

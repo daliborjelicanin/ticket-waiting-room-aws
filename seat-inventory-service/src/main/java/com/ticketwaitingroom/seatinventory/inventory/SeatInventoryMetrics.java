@@ -27,8 +27,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <dt>{@code seat.hold.releases} · {@code outcome=released|not_found}</dt>
  *   <dd>Compensations. {@code not_found} is a release arriving after the hold expired or
  *       was re-acquired, which the guard in {@link SeatRepository#releaseHold} refuses.</dd>
- *   <dt>{@code seat.purchase.confirmations} · {@code outcome=confirmed|not_found}</dt>
- *   <dd>Sales, and the confirm-after-expiry refusals the TTL check produces.</dd>
+ *   <dt>{@code seat.purchase.confirmations} · {@code outcome=confirmed|replayed|not_found}</dt>
+ *   <dd>Sales, and the confirm-after-expiry refusals the TTL check produces. {@code replayed}
+ *       is a retried confirm for a hold that already won. It counts no sale, and it is the
+ *       answer that keeps a lost response from becoming a refund.</dd>
  *   <dt>{@code seats.remaining} · {@code event=…}</dt>
  *   <dd>Available seats per event, refreshed on a schedule from a count query — not on
  *       the request path, where a query per hold would cost more than the hold. Only
@@ -57,9 +59,10 @@ public class SeatInventoryMetrics {
         counter("seat.hold.releases", found ? "released" : "not_found").increment();
     }
 
-    public void purchaseConfirmed(String eventId, boolean found) {
+    /** @param outcome {@code confirmed}, {@code replayed} or {@code not_found} */
+    public void purchaseConfirmed(String eventId, String outcome) {
         events.add(eventId);
-        counter("seat.purchase.confirmations", found ? "confirmed" : "not_found").increment();
+        counter("seat.purchase.confirmations", outcome).increment();
     }
 
     public void seatsSeeded(String eventId) {

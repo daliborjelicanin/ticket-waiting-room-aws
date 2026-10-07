@@ -19,9 +19,10 @@ project needs to demonstrate; everything else is secondary.
 Check which phase is currently active before assuming a build tool, deployment target,
 or infra format — the same logical architecture is intentionally rebuilt across phases.
 
-**Phase 1 is active.** The step-by-step development + infrastructure plan (low-cost,
-slice-based, teardown-after-every-session) lives in `docs/phase1-plan.md` — consult it
-for what to build next and keep its checkboxes up to date as slices complete.
+**Phase 1 is complete; Phase 2 starts from `docs/phase1-retro.md`** — the stack split,
+the decisions to make before the first module, and the defaults to pin. Phase 1's
+step-by-step plan (low-cost, slice-based, teardown-after-every-session) lives in
+`docs/phase1-plan.md`, with what each session found; keep its checkboxes up to date.
 
 **Diagrams.** `docs/architecture.md` holds the system-level picture — topology, the
 end-to-end purchase sequence, the saga state machine, the seat lifecycle, and the async
@@ -130,6 +131,9 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `./gradlew test` — run tests only
 - `./gradlew :waiting-room-service:bootRun` — run a single service (swap module name)
 - `./gradlew projects` — list all modules
+- `./scripts/teardown-sweep.sh` (`ALL_REGIONS=1` for every region) — read-only account
+  sweep after a session; exits 1 if anything that bills by the hour is still up, and lists
+  project resources the tag search cannot see. See `docs/runbook-teardown-sweep.md`
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
   module's dependency tree (useful for checking a Lambda module's classpath has not
   quietly regrown the HTTP stacks its cold start cannot afford)
@@ -150,11 +154,14 @@ hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate ser
 - API Gateway (REST) — catalog/checkout endpoints
 - API Gateway (WebSocket) — real-time queue position and seat-map updates
 - ALB — internal routing for REST services behind API Gateway
-- CloudFront — static frontend + event banner images
-- Route 53 — custom domain
-- ACM — TLS certificates
+- CloudFront — static frontend + event banner images. *Not built:* Phase 1 shipped no
+  frontend, so CloudFront has not yet earned its place
+- Route 53 — custom domain. *Not built; optional.* The one concrete reason to add it is a
+  domain identity with DKIM, so SES confirmation mail stops landing in spam
+- ACM — TLS certificates. *Not built:* arrives with the domain
 - WAF — rate limiting and bot protection on the purchase endpoint (anti-scalping)
-- VPC — public/private subnets, NAT Gateway, backend isolation
+- VPC — public/private subnets, NAT Gateway, backend isolation. Phase 1 used the default
+  VPC's public subnets with no NAT; Phase 2 starts here (`docs/phase1-retro.md` §6)
 
 **Data**
 - DynamoDB — seat inventory and holds: single-table design, conditional writes for atomic seat locking, TTL for auto-expiring holds. 
@@ -204,7 +211,13 @@ hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate ser
 - **Saga pattern via Step Functions** for checkout (hold seats → charge payment →
   issue tickets → notify), with explicit compensation (seat release) on payment
   failure — checkout must never leave seats held-but-unpaid indefinitely or silently
-  drop a compensating action.
+  drop a compensating action. After capture the compensation is a full **refund**, taken
+  only on a *definite* refusal of the confirm (a 404), never on a timeout. That 404 is
+  trustworthy only because the seat confirm is idempotent on the winning hold
+  (`ReturnValuesOnConditionCheckFailure = ALL_OLD`): do not make the confirm
+  non-idempotent again, or a lost response turns into a refund of a sold seat. One live
+  refund per payment is the partial unique index `ux_refunds_one_live_per_payment`, not a
+  service-layer check.
 - **Postgres/RDS only for data that needs real ACID transactions** (orders, payments,
   users) — do not migrate this data to DynamoDB for consistency's sake; the split
   between DynamoDB (high-contention inventory) and Postgres (transactional records)
