@@ -1,0 +1,87 @@
+# Secret and identifier scanning for this repo. Run by .githooks/pre-commit on every commit.
+#
+# gitleaks' default rules catch credentials (keys, tokens, private keys, passwords). The rules
+# below add what those miss: identifiers of the live AWS account and of the person running it,
+# which are not credentials but should not be published either -- see CLAUDE.md, "Secrets and
+# identifiers". Every rule matches the *shape* of a value, never a literal one, so this file
+# leaks nothing itself and also catches identifiers from any account, not just today's.
+#
+# Placeholders the docs use instead: <account-id>, <my-ip>, <aws-public-ip>, <rest-api-id>,
+# <websocket-api-id>, <http-api-id>, ticket-alb-<id>, <sg-id>, <subnet-id>, <vpc-id>.
+
+title = "ticket-waiting-room"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "aws-account-id-in-arn"
+description = "AWS account id inside an ARN. Write <account-id>, or look it up at run time with aws sts get-caller-identity."
+regex = '''arn:aws:[a-z0-9-]+:[a-z0-9-]*:(\d{12}):'''
+secretGroup = 1
+keywords = ["arn:aws:"]
+
+[[rules]]
+id = "aws-account-id-in-ecr-host"
+description = "AWS account id in an ECR registry host. Write <account-id>.dkr.ecr.<region>.amazonaws.com."
+regex = '''\b(\d{12})\.dkr\.ecr\.'''
+secretGroup = 1
+keywords = [".dkr.ecr."]
+
+[[rules]]
+id = "aws-account-id-labelled"
+description = "A 12-digit number labelled as an account id."
+regex = '''(?i)(?:\baccount[ _-]?id|\baws_account_id|"account")["'\s:=]+(\d{12})\b'''
+secretGroup = 1
+keywords = ["account"]
+
+[[rules]]
+id = "aws-account-id-in-bucket-name"
+description = "AWS account id inside the QR bucket's name. Write ticket-qr-<account-id>-<region>."
+regex = '''ticket-qr-(\d{12})-'''
+secretGroup = 1
+keywords = ["ticket-qr-"]
+
+[[rules]]
+id = "api-gateway-endpoint-id"
+description = "A live API Gateway id in an execute-api host. Write <rest-api-id> / <websocket-api-id>, or look it up."
+regex = '''\b([a-z0-9]{10})\.execute-api\.'''
+secretGroup = 1
+keywords = ["execute-api"]
+
+[[rules]]
+id = "alb-dns-name"
+description = "A load balancer's DNS name. Write ticket-alb-<id>."
+regex = '''\b([a-z0-9-]+-\d{6,})\.[a-z0-9-]+\.elb\.amazonaws\.com'''
+secretGroup = 1
+keywords = ["elb.amazonaws.com"]
+
+[[rules]]
+id = "aws-vpc-resource-id"
+description = "A security group, subnet, VPC, ENI, gateway, route table or instance id. Write <sg-id>, <subnet-id>, <vpc-id>."
+regex = '''\b((?:sg|subnet|vpc|eni|igw|rtb|nat|i)-[0-9a-f]{8,17})\b'''
+secretGroup = 1
+keywords = ["sg-", "subnet-", "vpc-", "eni-", "igw-", "rtb-", "nat-", "i-"]
+
+[[rules]]
+id = "public-ipv4"
+description = "A public IPv4 address, usually a home IP in a security-group rule. Write <my-ip> (or <aws-public-ip>)."
+regex = '''\b((?:\d{1,3}\.){3}\d{1,3})\b'''
+secretGroup = 1
+
+    # Private, loopback, link-local and unspecified addresses identify nobody.
+    [[rules.allowlists]]
+    regexTarget = "secret"
+    regexes = [
+        '''^10\.''',
+        '''^127\.''',
+        '''^172\.(1[6-9]|2[0-9]|3[01])\.''',
+        '''^192\.168\.''',
+        '''^169\.254\.''',
+        '''^0\.0\.0\.0$''',
+    ]
+
+[allowlist]
+description = "AWS's own documentation example account"
+regexTarget = "secret"
+regexes = ['''^123456789012$''']

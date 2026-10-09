@@ -40,7 +40,7 @@ it diffs as text.
 ## Tech Stack
 
 - Language: Java (JDK 26 / `openjdk-26`)
-- Framework: Spring Boot microservices (Spring Boot 4.1.0 / Spring Framework 7)
+- Framework: Spring Boot microservices (Spring Boot 4.1.1 / Spring Framework 7)
 - IDE config: `.idea/` is gitignored — IntelliJ regenerates it on Gradle import
 - Build tool: Gradle multi-module monorepo (Kotlin DSL), wrapper pinned to Gradle 9.6.1
   (required: JDK 26 toolchain compilation needs Gradle >= 9.4.0)
@@ -134,6 +134,8 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `./scripts/teardown-sweep.sh` (`ALL_REGIONS=1` for every region) — read-only account
   sweep after a session; exits 1 if anything that bills by the hour is still up, and lists
   project resources the tag search cannot see. See `docs/runbook-teardown-sweep.md`
+- `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
+  scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
   module's dependency tree (useful for checking a Lambda module's classpath has not
   quietly regrown the HTTP stacks its cold start cannot afford)
@@ -142,6 +144,48 @@ Not yet added (deliberately deferred until the relevant phase/work needs them):
 Jib/`bootBuildImage` config, Terraform, CI workflow files. Docker packaging is
 hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
 `hold-cleanup-lambda/Dockerfile` (Lambda container image).
+
+## Secrets and Identifiers — Never Committed
+
+Security of the owner's accounts comes before convenience: nothing that is a credential, or
+that identifies the live AWS account or the person running it, goes into git. The repo is
+meant to become public, and git history is forever: a value removed in a later commit is
+still in every earlier one. The history was rewritten once (2026-10-09) to remove exactly
+this kind of data, so any new occurrence is a regression.
+
+**Never commit, in any file, including runbook command transcripts and *Results* sections**
+(which is where these values came from last time):
+
+- **Credentials of any kind**: access keys, tokens, passwords, client secrets, private keys,
+  connection strings with a password, Terraform state, plans or `*.tfvars`, `.env` files.
+  `.gitignore` covers the file types; the rule covers content pasted anywhere else.
+- **Identifiers of the live account and its owner**, written as placeholders instead:
+
+  | Value | Write |
+  |---|---|
+  | AWS account id (ARNs, ECR hosts, bucket names) | `<account-id>` |
+  | the owner's home / public IP (security-group rules) | `<my-ip>` |
+  | an AWS-owned public IP (task, RDS) | `<aws-public-ip>` |
+  | API Gateway ids (`*.execute-api` hosts) | `<rest-api-id>`, `<websocket-api-id>`, `<http-api-id>` |
+  | load balancer DNS names | `ticket-alb-<id>` |
+  | security group, subnet, VPC ids | `<sg-id>`, `<subnet-id>`, `<vpc-id>` |
+
+  The owner's email address is fine to commit — it is their choice and their commit identity.
+
+**Scripts and config look values up at run time**, never carry a literal default: the account
+from `aws sts get-caller-identity`, an API id from `aws apigateway get-rest-apis`, an endpoint
+from an environment variable that is required rather than defaulted (see
+`load-test/k6/lib.js`, `load-test/scripts/settle.sh`). Terraform (Phase 2) reads them from data
+sources and resource attributes, which is the same rule.
+
+**Enforcement.** `.githooks/pre-commit` runs gitleaks with `.gitleaks.toml` (gitleaks' default
+credential rules plus project rules for every row above, matched by shape, never by literal
+value) on every commit, and fails closed if it cannot scan. Before making any commit, Claude
+confirms `git config core.hooksPath` is `.githooks`, and never passes `--no-verify`: a false
+positive is fixed with an allowlist entry in `.gitleaks.toml`, and a real hit is fixed in the
+content. If a value is found **already pushed**, stop and tell the owner. A follow-up commit
+does not remove it from history; the fix is a `git filter-repo --replace-text` rewrite and a
+force-push, which is the owner's decision.
 
 ## AWS Services by Category
 

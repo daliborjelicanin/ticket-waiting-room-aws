@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Blocks a commit whose staged changes contain a secret or an identifier this repo keeps out
+# of git (CLAUDE.md, "Secrets and identifiers"). Rules: .gitleaks.toml.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+#
+# Fails closed: if nothing can scan, the commit is refused rather than let through unscanned.
+# A false positive is fixed in .gitleaks.toml (an allowlist entry), never with --no-verify.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+image=ghcr.io/gitleaks/gitleaks:v8.30.1
+args=(git --pre-commit --staged --redact --no-banner --config .gitleaks.toml .)
+
+if command -v gitleaks >/dev/null 2>&1; then
+  cd "$root" && exec gitleaks "${args[@]}"
+fi
+
+# Docker Desktop's context may be configured but not running; the system daemon still is.
+if ! docker info >/dev/null 2>&1 && [ -S /var/run/docker.sock ]; then
+  export DOCKER_HOST=unix:///var/run/docker.sock
+fi
+if docker info >/dev/null 2>&1; then
+  # Same uid as the repo's owner, or git inside the container refuses it as "dubious ownership".
+  exec docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$root:/repo" -w /repo "$image" "${args[@]}"
+fi
+
+echo "pre-commit: cannot scan for secrets -- install gitleaks, or start Docker." >&2
+exit 1

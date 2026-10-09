@@ -4,7 +4,12 @@
 import http from 'k6/http';
 import { randomBytes } from 'k6/crypto';
 
-export const API = __ENV.API || 'https://<rest-api-id>.execute-api.eu-central-1.amazonaws.com/dev';
+// The edge's invoke URL, e.g. https://<rest-api-id>.execute-api.eu-central-1.amazonaws.com/dev.
+// Passed in with -e API=..., never written here: it is a live, billable endpoint.
+export const API = __ENV.API;
+if (!API) {
+    throw new Error('set API to the ticket-edge invoke URL: k6 run -e API=https://... ');
+}
 
 // Bot Control on POST /purchase classifies k6's own User-Agent as an HTTP library and
 // blocks it (runbook-waf.md). A browser UA is what a real buyer's browser sends anyway.

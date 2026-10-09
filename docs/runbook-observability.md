@@ -858,8 +858,11 @@ git diff --stat docs/dashboard-ticket-waiting-room.json    # layout tweaks made 
 **CLI equivalent of steps 1–2:**
 
 ```bash
+# The committed body says <account-id> in the saga's ARN: substitute it on the way in.
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+sed "s/<account-id>/$ACCOUNT/g" docs/dashboard-ticket-waiting-room.json > /tmp/dashboard.json
 aws cloudwatch put-dashboard --region eu-central-1 --dashboard-name ticket-waiting-room \
-  --dashboard-body file://docs/dashboard-ticket-waiting-room.json
+  --dashboard-body file:///tmp/dashboard.json
 # an empty DashboardValidationMessages list is the success signal; anything else names the widget
 ```
 

@@ -25,8 +25,11 @@ k6 is not installed on the laptop; the official image is enough:
 alias k6='docker run --rm -i --user "$(id -u):$(id -g)" -v "$PWD/load-test:/work" -w /work grafana/k6:0.55.0'
 load-test/scripts/create-test-users.sh 50        # once
 load-test/scripts/mint-tokens.sh 50              # before every run (tokens live an hour)
-k6 run -e EVENT=race-$(date +%s) -e VUS=200 -e SEATS=10 k6/seat-race.js
-k6 run -e EVENT=buy-$(date +%s)  -e USERS=50 -e SEATS=10 k6/purchase-race.js
+# The edge's invoke URL is looked up, not committed: it is a live, billable endpoint.
+API_ID=$(aws apigateway get-rest-apis --query "items[?name=='ticket-edge'].id" --output text)
+API=https://$API_ID.execute-api.eu-central-1.amazonaws.com/dev
+k6 run -e API=$API -e EVENT=race-$(date +%s) -e VUS=200 -e SEATS=10 k6/seat-race.js
+k6 run -e API=$API -e EVENT=buy-$(date +%s)  -e USERS=50 -e SEATS=10 k6/purchase-race.js
 load-test/scripts/invariants.sh <event id printed by the run>
 load-test/scripts/settle.sh <event id>
 ```

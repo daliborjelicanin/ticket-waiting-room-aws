@@ -6,7 +6,9 @@
 set -euo pipefail
 EVENT=${1:?event id}
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
-SM=arn:aws:states:$REGION:<account-id>:stateMachine:checkout-saga
+# The account is looked up, never written down: account ids stay out of the repo.
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+SM=arn:aws:states:$REGION:$ACCOUNT:stateMachine:checkout-saga
 SINCE=$(date -u -d '-2 hours' +%FT%TZ)
 aws stepfunctions list-executions --region "$REGION" --state-machine-arn "$SM" --max-results 1000 --output json \
 | jq -r --arg since "$SINCE" '.executions[] | select(.startDate > $since) | .executionArn' \
