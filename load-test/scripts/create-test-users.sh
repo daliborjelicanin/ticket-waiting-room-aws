@@ -4,13 +4,15 @@
 #
 #   load-test/scripts/create-test-users.sh 50
 #
-# Needs POOL_ID from ~/.ticket-waiting-room/cognito.env. The users are free (Essentials
+# Needs POOL_ID from ~/.ticket-waiting-room/cognito.env and LOAD_TEST_PASSWORD in the
+# environment (required, no default: these are real, permanent users in a live pool, and a
+# password in a public repo is everyone's). The users are free (Essentials
 # tier: 10,000 MAU) and permanent; they cost nothing between sessions and delete-test-users.sh
 # removes them when the pool should be tidy again.
 set -euo pipefail
 source ~/.ticket-waiting-room/cognito.env
 N=${1:?number of users}
-PASSWORD=${LOAD_TEST_PASSWORD:-correct-horse-battery}
+PASSWORD=${LOAD_TEST_PASSWORD:?set LOAD_TEST_PASSWORD -- password of the lt-N test users, never a committed default}
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
 
 created=0; existing=0

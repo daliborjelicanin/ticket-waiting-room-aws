@@ -167,6 +167,20 @@ Phase 1 optimised for learning depth and near-zero cost, and says so where it cu
   delivery sends a duplicate mail, recorded as a conscious omission.
 - **No frontend.** The optional CloudFront + S3 page was left out: the proof is the API.
 
+## Known gaps
+
+Not simplifications but holes, listed so a reader does not have to find them:
+
+- **Purchase does not check admission.** The waiting room orders and admits fairly, but
+  `POST /events/{id}/purchase` starts the saga for any valid ID token, admitted or not —
+  the load test's buyers wait their turn because the script makes them, not because the
+  edge does. The fix is a first saga state that asks the waiting room, with the ops token,
+  whether this `sub` holds an unexpired pass (Redis already answers that — it is what
+  `position.lua` reads for `GET /events/{id}/queue`), and fails the execution before `HoldSeat` if not.
+- **The client names the price.** `amountCents` comes from the purchase body, because there
+  is no event catalog to read it from. Seat inventory should own the price per seat and
+  return it with the hold, and the saga should charge what the hold says.
+
 **Phase 2** rebuilds the same architecture in Terraform, starting with the network, and adds
 GitHub Actions with OIDC. What Phase 1 taught that Terraform needs (the stack split, the
 values every rebuild minted, the defaults that failed silently, and the decisions to make

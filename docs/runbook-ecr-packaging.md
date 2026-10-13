@@ -8,7 +8,7 @@ repeat verbatim for the other four modules — substitute the module name throug
 
 ```bash
 export DOCKER_HOST=unix:///var/run/docker.sock   # the desktop-linux context socket is not running
-export JAVA_HOME=/home/boka/.sdkman/candidates/java/26.0.1-tem
+export JAVA_HOME=/path/to/jdk   # any JDK 17+ launches Gradle; the build provisions its own 26
 ```
 
 ## Build

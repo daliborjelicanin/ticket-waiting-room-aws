@@ -19,6 +19,12 @@ WORKDIR /var/task
 # classpath, flat.
 COPY build/lambda/lib/ ./lib/
 
+# Lambda ignores this and runs the function as its own unprivileged sandbox user, so it
+# changes nothing on AWS. It is here so the image is non-root everywhere else too -- under
+# the Runtime Interface Emulator locally, and to an image scanner -- with no account needed:
+# lib/ is world-readable as copied, and nothing writes outside /tmp.
+USER 1001:1001
+
 # The wildcard classpath is expanded by the JVM, not the shell, so exec form is correct
 # here — a shell-form ENTRYPOINT would hand the glob to sh and break on any lib/ rename.
 #

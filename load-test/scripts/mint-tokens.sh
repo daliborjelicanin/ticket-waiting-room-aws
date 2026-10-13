@@ -5,10 +5,12 @@
 # before the run, and re-mint rather than reuse across sessions.
 #
 #   load-test/scripts/mint-tokens.sh 50
+#
+# LOAD_TEST_PASSWORD must be the one create-test-users.sh was run with.
 set -euo pipefail
 source ~/.ticket-waiting-room/cognito.env
 N=${1:?number of users}
-PASSWORD=${LOAD_TEST_PASSWORD:-correct-horse-battery}
+PASSWORD=${LOAD_TEST_PASSWORD:?set LOAD_TEST_PASSWORD -- password of the lt-N test users, never a committed default}
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
 OUT="$(dirname "$0")/../.tokens.json"
 

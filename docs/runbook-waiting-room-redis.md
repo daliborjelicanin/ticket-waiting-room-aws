@@ -316,7 +316,7 @@ places: True`, no duplicates.
 ### Results, 2026-08-23
 
 Cache provisioned in **~5 min** (`creating` → `available`). Primary endpoint this session:
-`ticket-waiting-room-cache.cqwxt6.ng.0001.euc1.cache.amazonaws.com:6379`, encryption in
+`ticket-waiting-room-cache.<cache-id>.ng.0001.euc1.cache.amazonaws.com:6379`, encryption in
 transit **off**, so `REDIS_SSL` was left unset.
 
 Task booted in **32.9 s** (Java 26.0.2, Spring Boot 4.1.0, Tomcat 11.0.22 on 8080), zero

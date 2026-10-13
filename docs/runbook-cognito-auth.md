@@ -300,6 +300,13 @@ capabilities, which is what makes the scope check mean something.
 
 Two, because the headline result is one of them being told the other's order does not exist.
 
+Pick their password once and keep it out of the repo — a password published here would sign
+anyone in as these users:
+
+```bash
+export TEST_PASSWORD="$(openssl rand -base64 18)Aa1!"   # meets the pool's default policy
+```
+
 **Console — Users → Create user**, twice:
 
 | Field | alice | bob |
@@ -307,7 +314,7 @@ Two, because the headline result is one of them being told the other's order doe
 | Invitation message | **Don't send an invitation** | same |
 | Email address | `alice@example.test` — or a real address you can read, for claim 10 | `bob@example.test` |
 | Mark email address as verified | ✅ | ✅ |
-| Temporary password | **Set a password** → `correct-horse-battery` | same |
+| Temporary password | **Set a password** → `$TEST_PASSWORD` (below) | same |
 
 The console creates both in `FORCE_CHANGE_PASSWORD` state, so the first sign-in would be
 a challenge rather than a token. One CLI command per user makes the password permanent —
@@ -316,7 +323,7 @@ the console cannot:
 ```bash
 for u in alice bob; do
   aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID \
-    --username $u@example.test --password 'correct-horse-battery' --permanent
+    --username $u@example.test --password "$TEST_PASSWORD" --permanent
 done
 ```
 
@@ -328,7 +335,7 @@ for u in alice bob; do
     --user-attributes Name=email,Value=$u@example.test Name=email_verified,Value=true \
     --message-action SUPPRESS
   aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID --username $u@example.test \
-    --password 'correct-horse-battery' --permanent
+    --password "$TEST_PASSWORD" --permanent
 done
 ```
 
@@ -346,7 +353,7 @@ regardless, and the curl below exercises the same path the saga will.)
 ```bash
 # Customer: one call returns both kinds of token.
 aws cognito-idp initiate-auth --client-id $WEB_CLIENT --auth-flow USER_PASSWORD_AUTH \
-  --auth-parameters USERNAME=alice@example.test,PASSWORD=correct-horse-battery \
+  --auth-parameters USERNAME=alice@example.test,PASSWORD="$TEST_PASSWORD" \
   --query 'AuthenticationResult.[AccessToken,IdToken]' --output text
 # → ALICE_AT  ALICE_IT
 

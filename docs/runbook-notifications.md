@@ -160,7 +160,7 @@ this role sending as any identity the account happens to own.
 ### 5. ECR + task definition
 
 ```bash
-export JAVA_HOME=/home/boka/.sdkman/candidates/java/26.0.1-tem
+export JAVA_HOME=/path/to/jdk   # any JDK 17+ launches Gradle; the build provisions its own 26
 export DOCKER_HOST=unix:///var/run/docker.sock
 
 ./gradlew :notification-service:build

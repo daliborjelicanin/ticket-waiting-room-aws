@@ -10,7 +10,7 @@ in `docs/runbook-load-test.md`; this is the mechanics.
 | `k6/seat-race.js` | **Scenario A** — N operators race `POST …/seats/{seat}/hold` on S seats: exactly S×201, the rest 409, and what losing costs at p99 |
 | `k6/purchase-race.js` | **Scenario B** — M customers (one Cognito identity each) join, are admitted by a doorman VU, and race `POST /purchase` for S seats: S sagas succeed, the rest fail at `HoldSeat`, and what a buyer felt from 202 to `PAID` |
 | `k6/lib.js` | the edge URL, a browser `User-Agent` (Bot Control blocks k6's), token headers, seeding, a v4 uuid |
-| `scripts/create-test-users.sh N` | `lt-1…N@example.test` in the pool, permanent password; idempotent |
+| `scripts/create-test-users.sh N` | `lt-1…N@example.test` in the pool, permanent password from `LOAD_TEST_PASSWORD` (required); idempotent |
 | `scripts/mint-tokens.sh N` | operator + N customer token pairs → `.tokens.json` (gitignored, valid ~1 h) |
 | `scripts/invariants.sh <event>` | **the "0 double-sold seats" check**: seats SOLD = orders PAID = payments CAPTURED = tickets; no seat with two PAID orders or two tickets; no CAPTURED on a non-PAID order; no order with two live payments |
 | `scripts/settle.sh <event>` | how every saga of the run ended, from Step Functions (`SUCCEEDED` / `FAILED SeatUnavailable` / anything else) |
@@ -23,6 +23,8 @@ k6 is not installed on the laptop; the official image is enough:
 ```bash
 # --user: the image runs k6 as its own uid, and .tokens.json is mode 600 for yours.
 alias k6='docker run --rm -i --user "$(id -u):$(id -g)" -v "$PWD/load-test:/work" -w /work grafana/k6:0.55.0'
+# Required, never committed: the users are permanent, and so is anything pushed to git.
+export LOAD_TEST_PASSWORD="$(openssl rand -base64 18)Aa1!"   # keep it for later sessions
 load-test/scripts/create-test-users.sh 50        # once
 load-test/scripts/mint-tokens.sh 50              # before every run (tokens live an hour)
 # The edge's invoke URL is looked up, not committed: it is a live, billable endpoint.

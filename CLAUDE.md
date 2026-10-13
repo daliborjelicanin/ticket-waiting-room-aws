@@ -169,6 +169,8 @@ this kind of data, so any new occurrence is a regression.
   | API Gateway ids (`*.execute-api` hosts) | `<rest-api-id>`, `<websocket-api-id>`, `<http-api-id>` |
   | load balancer DNS names | `ticket-alb-<id>` |
   | security group, subnet, VPC ids | `<sg-id>`, `<subnet-id>`, `<vpc-id>` |
+  | ElastiCache / RDS endpoint labels (`….<id>.ng.0001.euc1.cache…`) | `<cache-id>`, `<rds-id>` |
+  | a local home directory (`/home/<user>/…`) | `$HOME/…` or `/path/to/…` |
 
   The owner's email address is fine to commit — it is their choice and their commit identity.
 
@@ -333,8 +335,8 @@ force-push, which is the owner's decision.
     real logic readable instead of pushing it apart with boilerplate. A nested record
     that needs a real body (compact constructor, extra methods) uses the multi-line
     form instead.
-- No build system exists yet — when adding one, update this file's Tech Stack section
-  with real build/test/lint commands rather than leaving them as placeholders.
+- When a build, test or lint command changes, update this file's *Build Commands* section
+  in the same change, with the real command rather than a placeholder.
 
 ### Java / Spring Boot Best Practices
 

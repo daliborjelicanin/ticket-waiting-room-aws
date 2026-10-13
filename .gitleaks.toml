@@ -7,7 +7,8 @@
 # leaks nothing itself and also catches identifiers from any account, not just today's.
 #
 # Placeholders the docs use instead: <account-id>, <my-ip>, <aws-public-ip>, <rest-api-id>,
-# <websocket-api-id>, <http-api-id>, ticket-alb-<id>, <sg-id>, <subnet-id>, <vpc-id>.
+# <websocket-api-id>, <http-api-id>, ticket-alb-<id>, <sg-id>, <subnet-id>, <vpc-id>, <cache-id>,
+# <rds-id>, $HOME.
 
 title = "ticket-waiting-room"
 
@@ -62,6 +63,27 @@ description = "A security group, subnet, VPC, ENI, gateway, route table or insta
 regex = '''\b((?:sg|subnet|vpc|eni|igw|rtb|nat|i)-[0-9a-f]{8,17})\b'''
 secretGroup = 1
 keywords = ["sg-", "subnet-", "vpc-", "eni-", "igw-", "rtb-", "nat-", "i-"]
+
+[[rules]]
+id = "aws-account-id-in-sqs-url"
+description = "AWS account id in an SQS queue URL. Write https://sqs.<region>.amazonaws.com/<account-id>/<queue>."
+regex = '''sqs\.[a-z0-9-]+\.amazonaws\.com/(\d{12})/'''
+secretGroup = 1
+keywords = ["sqs."]
+
+[[rules]]
+id = "aws-data-store-endpoint"
+description = "An ElastiCache or RDS endpoint: the label before the region is unique to the account. Write <cache-id> / <rds-id>."
+regex = '''\.([a-z0-9]{6,12})\.(?:ng\.\d{4}\.[a-z0-9]+\.cache|[a-z]{2}-[a-z]+-\d\.rds)\.amazonaws\.com'''
+secretGroup = 1
+keywords = ["cache.amazonaws.com", "rds.amazonaws.com"]
+
+[[rules]]
+id = "local-home-path"
+description = "A path under a real home directory names the person running it. Write $HOME/... or /path/to/..."
+regex = '''(?:/home/|/Users/)([a-z][a-z0-9._-]*)/'''
+secretGroup = 1
+keywords = ["/home/", "/users/"]
 
 [[rules]]
 id = "public-ipv4"
