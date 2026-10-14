@@ -187,3 +187,7 @@ values every rebuild minted, the defaults that failed silently, and the decision
 first) is in [`docs/phase1-retro.md`](docs/phase1-retro.md). **Phase 3** re-platforms it
 onto EKS, where the OTLP sidecar becomes a DaemonSet and nothing in a service changes. The plan, with every checkbox and
 what each session found, is [`docs/phase1-plan.md`](docs/phase1-plan.md).
+
+## License
+
+[MIT](LICENSE)
