@@ -19,10 +19,14 @@ project needs to demonstrate; everything else is secondary.
 Check which phase is currently active before assuming a build tool, deployment target,
 or infra format — the same logical architecture is intentionally rebuilt across phases.
 
-**Phase 1 is complete; Phase 2 starts from `docs/phase1-retro.md`** — the stack split,
-the decisions to make before the first module, and the defaults to pin. Phase 1's
-step-by-step plan (low-cost, slice-based, teardown-after-every-session) lives in
-`docs/phase1-plan.md`, with what each session found; keep its checkboxes up to date.
+**Phase 1 is complete; Phase 2 (Terraform) is planned in `docs/phase2-plan.md`**: decisions
+D1–D27, all settled 2026-11-11, and slices 0–7 with checkboxes. Its evidence is
+`docs/phase1-retro.md` (the stack split, the minted values, the defaults to pin). A settled
+D-entry is changed by editing it and dating the change, not by quietly diverging from it in
+code. Keep the slice checkboxes up to date. Phase 1's own plan, with what each session found,
+stays in `docs/phase1-plan.md`. `docs/architecture.md` describes what is **built**, so it
+changes only as Phase 2 slices land; the Phase 2 *target* pictures live in the plan (§1–§2)
+and `docs/diagrams/phase2-*.png`.
 
 **Diagrams.** `docs/architecture.md` holds the system-level picture — topology, the
 end-to-end purchase sequence, the saga state machine, the seat lifecycle, and the async
@@ -202,9 +206,11 @@ force-push, which is the owner's decision.
 - ALB — internal routing for REST services behind API Gateway
 - CloudFront — static frontend + event banner images. *Not built:* Phase 1 shipped no
   frontend, so CloudFront has not yet earned its place
-- Route 53 — custom domain. *Not built; optional.* The one concrete reason to add it is a
-  domain identity with DKIM, so SES confirmation mail stops landing in spam
-- ACM — TLS certificates. *Not built:* arrives with the domain
+- Route 53 — custom domain. *Not built; planned for Phase 2 (D20).* It solves three problems:
+  stable ticket QR URLs independent of the API id, SES domain identity with DKIM/SPF/DMARC so
+  confirmation mail stops landing in spam, and certificates for TLS to the internal ALB
+- ACM — TLS certificates. *Not built; planned for Phase 2 (D20):* the API custom domain and
+  the internal ALB
 - WAF — rate limiting and bot protection on the purchase endpoint (anti-scalping)
 - VPC — public/private subnets, NAT Gateway, backend isolation. Phase 1 used the default
   VPC's public subnets with no NAT; Phase 2 starts here (`docs/phase1-retro.md` §6)
