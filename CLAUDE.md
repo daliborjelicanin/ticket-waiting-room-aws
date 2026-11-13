@@ -143,9 +143,16 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
   module's dependency tree (useful for checking a Lambda module's classpath has not
   quietly regrown the HTTP stacks its cold start cannot afford)
+- `source infra/scripts/tf-env.sh` (`default` for the management account) then
+  `infra/scripts/tf-init.sh infra/live/<root>` — point the shell at one account and init a root
+  against the state bucket; see `infra/README.md`. Phase 2 work uses the `twr-dev` profile
+- `terraform fmt -recursive infra` and, from `infra/`,
+  `tflint --init && tflint --recursive --config "$PWD/.tflint.hcl"` — the gates `ci.yml` runs
+  (pre-commit runs `terraform fmt -check` when `.tf` files are staged)
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-Jib/`bootBuildImage` config, Terraform, CI workflow files. Docker packaging is
+Jib/`bootBuildImage` config; Terraform resources and the deploy workflows (slice 0 has only
+the `infra/` skeleton and `.github/workflows/ci.yml`). Docker packaging is
 hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
 `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
@@ -206,11 +213,10 @@ force-push, which is the owner's decision.
 - ALB — internal routing for REST services behind API Gateway
 - CloudFront — static frontend + event banner images. *Not built:* Phase 1 shipped no
   frontend, so CloudFront has not yet earned its place
-- Route 53 — custom domain. *Not built; planned for Phase 2 (D20).* It solves three problems:
-  stable ticket QR URLs independent of the API id, SES domain identity with DKIM/SPF/DMARC so
-  confirmation mail stops landing in spam, and certificates for TLS to the internal ALB
-- ACM — TLS certificates. *Not built; planned for Phase 2 (D20):* the API custom domain and
-  the internal ALB
+- Route 53 — custom domain. *Not built; deferred (`docs/phase2-plan.md` D20).* It would solve
+  SES deliverability (DKIM/SPF/DMARC), TLS to the internal ALB, and QR URLs independent of the
+  API id; Phase 2 accepts those three gaps to keep budget margin
+- ACM — TLS certificates. *Not built:* arrives with the domain
 - WAF — rate limiting and bot protection on the purchase endpoint (anti-scalping)
 - VPC — public/private subnets, NAT Gateway, backend isolation. Phase 1 used the default
   VPC's public subnets with no NAT; Phase 2 starts here (`docs/phase1-retro.md` §6)

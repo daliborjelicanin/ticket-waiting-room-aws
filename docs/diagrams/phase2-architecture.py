@@ -12,7 +12,7 @@ from diagrams.aws.database import Dynamodb, ElastiCache, RDS
 from diagrams.aws.engagement import SES
 from diagrams.aws.integration import Eventbridge, SNS, SQS, StepFunctions
 from diagrams.aws.management import Cloudtrail, Cloudwatch
-from diagrams.aws.network import ALB, APIGateway, Endpoint, InternetGateway, NATGateway, Route53
+from diagrams.aws.network import ALB, APIGateway, Endpoint, InternetGateway, NATGateway
 from diagrams.aws.security import KMS, Cognito, Guardduty, SecretsManager, WAF
 from diagrams.aws.storage import S3
 from diagrams.onprem.client import Users
@@ -43,12 +43,11 @@ with Diagram(
 ):
     buyer = Users("buyers (browser)\n+ gate scanners")
     cognito = Cognito("Cognito user pool\nM2M + gate scanner\n(ticketing/gate)")
-    dns = Route53("Route 53 + ACM\napi.<domain>\nSES DKIM/SPF/DMARC")
 
     with Cluster("Regional edge"):
         with Cluster("session", graph_attr=SESSION):
             waf = WAF("WAF on queue join + purchase\nIP · JA4 · token · Bot Control\nanonymous IP · baseline on all")
-        apigw = APIGateway("API Gateway REST\nREGIONAL, custom domain\nstage 'dev' (session)")
+        apigw = APIGateway("API Gateway REST\nREGIONAL\nstage 'dev' (session)")
         wsapi = APIGateway("API Gateway WebSocket\n$connect consumes a\nsingle-use ticket (D18)")
 
     with Cluster("Own VPC — 3 AZs, three subnet tiers, per-service SGs"):
@@ -58,7 +57,7 @@ with Diagram(
                 nat = NATGateway("zonal NAT Gateway\nAZ a")
         with Cluster("private app subnets"):
             with Cluster("session", graph_attr=SESSION):
-                alb = ALB("internal ALB, HTTPS\nvia VPC Link v2\nno X-Edge-Secret")
+                alb = ALB("internal ALB\nvia VPC Link v2\nno X-Edge-Secret")
                 with Cluster("ECS Fargate ARM64 — Spot in dev, 2 tasks/AZ for the proof"):
                     waiting = ECS("waiting-room")
                     seats = ECS("seat-inventory")
@@ -94,7 +93,6 @@ with Diagram(
     ses = SES("SES")
 
     buyer >> Edge(label="sign in") >> cognito
-    buyer >> Edge(label="DNS") >> dns
     buyer >> Edge(label="Bearer token") >> waf >> apigw
     buyer >> Edge(label="wss ?ticket=") >> wsapi >> Edge(label="delete ticket +\nput connection") >> ddb
     waiting >> Edge(label="issue ticket\n(conditional cap)", style="dashed") >> endpoints

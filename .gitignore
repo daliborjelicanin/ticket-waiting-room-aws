@@ -37,6 +37,8 @@ local/env/
 !*.tfvars.example
 crash.log
 crash.*.log
+# Modules are pinned by the root that calls them; only roots commit a lock file.
+infra/modules/**/.terraform.lock.hcl
 override.tf
 override.tf.json
 *_override.tf

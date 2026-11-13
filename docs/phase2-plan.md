@@ -1,6 +1,7 @@
 # Phase 2 Plan — Terraform, Production-Shaped, Low-Cost
 
-**Status: all decisions settled (2026-11-11); nothing built yet. Next: slice 0.** Every
+**Status: all decisions settled (2026-11-11) except D20, deferred. Account structure done by hand
+(2026-11-13, D12): Phase 2 runs in the member account `twr-dev`. Nothing built yet. Next: slice 0.** Every
 decision carries an id (**D1**–**D27**; the index is at the top of §3). Changing a settled
 decision means editing its entry and dating the change. When a slice is done, tick its boxes
 the same way `phase1-plan.md` does.
@@ -19,8 +20,7 @@ Rebuildable from a cold account by `apply`, and provably torn down by `destroy`.
 - **Phase 2 total: ≤ $20.** Steady state $10–20/month is acceptable while working, but
   anything billed by the hour lives in the `session` stack and exists only while a
   session is running.
-- **Standing cost target: ≈ $2.5–3/month**: the KMS key, the Route 53 hosted zone, alarms
-  beyond the free tier, GuardDuty, ECR and pennies of S3. SSM standard parameters, CloudTrail's
+- **Standing cost target: ≈ $2–2.5/month**: the KMS key, alarms beyond the free tier, GuardDuty, ECR and pennies of S3. SSM standard parameters, CloudTrail's
   first trail and Access Analyzer are free.
 - **Layered guardrails, all as code** (D17): the hourly *session reaper* (the real brake),
   Infracost on PRs, Cost Anomaly Detection, and budgets: $10 monthly and $20 for the phase,
@@ -47,11 +47,10 @@ unchanged (see *Carried Over Unchanged* below).
 flowchart LR
     Browser["Browser / client · gate scanner"]
     COG["Cognito user pool<br/>+ <b>ticketing/gate</b> scope (D19)"]
-    R53["<b>Route 53 + ACM</b><br/>api.&lt;domain&gt;, SES DKIM (D20)"]
 
     subgraph edge["Regional edge"]
         WAF["WAF<br/><b>queue join + purchase:</b> IP, JA4, token,<br/>Bot Control, anonymous IP · baseline on all (D6)"]
-        APIGW["API Gateway REST<br/>REGIONAL, custom domain"]
+        APIGW["API Gateway REST<br/>REGIONAL"]
         WSAPI["API Gateway WebSocket<br/><b>$connect consumes a ticket</b> (D18)"]
     end
 
@@ -92,7 +91,6 @@ flowchart LR
     end
 
     Browser --> COG
-    Browser --> R53
     Browser --> WAF --> APIGW
     Browser -->|"wss ?ticket="| WSAPI -->|"TransactWriteItems:<br/>delete ticket + put connection"| DDB
     WR -->|"issue connect ticket<br/>(conditional cap)"| GWE
@@ -158,7 +156,11 @@ flowchart LR
         MAIN["main"]
         WF["Actions workflows"]
     end
-    subgraph aws["AWS account"]
+    subgraph mgmt["management account — no workloads, no CI"]
+        IDC["IAM Identity Center<br/>permission sets"]
+        SCP["SCPs on OU workloads<br/>infra/org, applied by hand"]
+    end
+    subgraph aws["member account twr-dev (OU workloads)"]
         OIDC["IAM OIDC provider"]
         IMGR["role: ci-images<br/>ECR push + /images/* only"]
         PLAN["role: tf-plan<br/>no data-plane reads"]
@@ -184,18 +186,21 @@ flowchart LR
     APPLYS --> SES -->|"data sources"| SSM
     IMGR -->|"digests"| IMG["SSM /twr/dev/images/*"] -->|"resolved at dispatch → -var"| SES
     ECR -.-> IMG
+    IDC -->|"owner SSO: admin (slices 0–3)"| FND
+    SCP -.->|"bounds every principal"| aws
 ```
 
 ### Repository layout (D1, D2)
 
 ```
 infra/
+  org/                management account only, applied by hand: SSO permission sets + assignments, SCPs on OU `workloads`, management-account $1 budget, own state bucket (D12)
   bootstrap/          local state → migrated: state bucket, OIDC provider + sub customisation, tf-plan / tf-apply-foundation / tf-apply-session roles, boundary
   modules/            own modules (one concern each; see D1)
     network/          wraps terraform-aws-modules/vpc + gateway endpoints + SGs
     kms/  dynamodb/  messaging/  identity/  iam/  ecr/  lambda-function/
     websocket-api/  rest-api/  waf/  alb/  ecs-service/  rds/  cache/
-    saga/  observability/  budgets/  dns/ (Route 53, ACM, SES identity)  audit/ (CloudTrail, GuardDuty, alerts)
+    saga/  observability/  budgets/  audit/ (CloudTrail, GuardDuty, alerts)
       each: main.tf  variables.tf  outputs.tf  versions.tf  README.md (terraform-docs)
             tests/*.tftest.hcl   plan-only module tests with mock_provider (D2)
   live/
@@ -212,15 +217,15 @@ docs/adr/             MADR records for the eight significant decisions (D26)
 | `foundation` (standing ≈ $2.5–3/mo) | `session` (by the hour, toggled) |
 |---|---|
 | VPC, subnets (EKS-tagged), route tables, IGW, gateway endpoints + policies, per-service SGs, flow logs → S3 | NAT Gateway + its EIP, the private route to it |
-| KMS CMK + alias (key policy with every producer's grant) | Internal ALB (ACM certificate from foundation), listener, rules, target groups |
-| DynamoDB `twr-dev-seat-inventory`, `twr-dev-connections` (PITR, deletion protection) | VPC Link v2, the `/{proxy+}` private integration, deployment + `dev` stage, base-path mapping to the custom domain (D5, D20) |
+| KMS CMK + alias (key policy with every producer's grant) | Internal ALB (HTTP listener, reachable only from the VPC link SG), listener rules, target groups |
+| DynamoDB `twr-dev-seat-inventory`, `twr-dev-connections` (PITR, deletion protection) | VPC Link v2, the `/{proxy+}` private integration, deployment + `dev` stage (D5) |
 | S3 QR bucket, ECR repos (immutable, lifecycle, scan on push) | RDS instance (+ managed secret on the CMK), per-service DB secrets (write-only, fresh per session), Valkey cluster |
 | SQS/DLQs/redrive, SNS + subscriptions | ECS services + task definitions + autoscaling (scheduled + target tracking), migration task definitions |
 | Cognito pool (deletion protection), domain, resource server, clients incl. the gate scanner | EventBridge connection, `checkout-saga` state machine |
 | IAM roles + policies + permissions boundary, Access Analyzer | WAF web ACL + association + logging |
 | 3 Lambdas + ESMs, WebSocket API (connect-ticket template, route throttling) + stage | `hold-seat-schedule` |
-| REST API + resources/methods (id stable), API custom domain name | Session alarms: saga, ALB 5xx, unhealthy/missing tasks (D16) |
-| Route 53 hosted zone, ACM certificates, SES domain identity + DKIM/SPF/DMARC records | `expires_at` SSM parameter read by the reaper (D15) |
+| REST API + resources/methods (id and invoke URL stable for the life of foundation) | Session alarms: saga, ALB 5xx, unhealthy/missing tasks (D16) |
+| SES address identities (sandbox) | `expires_at` SSM parameter read by the reaper (D15) |
 | Log groups, dashboard, foundation alarms, `ops-alarms` topic, budgets, anomaly monitor | |
 | CloudTrail trail + bucket, GuardDuty detector, EventBridge security alerts | |
 
@@ -230,7 +235,7 @@ Toggles in `session`: `enable_nat`, `enable_alb`, `enable_db`, `enable_cache`, `
 
 ---
 
-## 3. Decisions (all settled 2026-11-11)
+## 3. Decisions (settled 2026-11-11; D20 deferred)
 
 Each entry gives the decision, the reason and the cost. **Architect review 2026-11-11:** every
 entry was reviewed against current industry practice before it was settled. The *Review* lines
@@ -249,7 +254,7 @@ record what that review changed and why, and stay as the reasoning.
 | D9 | Private RDS, one database role per service | 3 |
 | D10 | Migrations as a one-off ECS task | 3 |
 | D11 | One CMK, with a written rule for which stores use it | 1 |
-| D12 | IAM as code; one execution role per service; humans read, pipelines write | 0–1 |
+| D12 | IAM as code; one execution role per service; humans read, pipelines write; workload in a member account | 0–1 |
 | D13 | Secrets: write-only, rotated per session; third-party keys set out of band | 3 |
 | D14 | Four OIDC roles, protected `main`, nothing identifying in public logs | 0, 4 |
 | D15 | Workflows: affected images, digests in SSM, reaper with `expires_at`, drift | 4 |
@@ -257,7 +262,7 @@ record what that review changed and why, and stay as the reasoning.
 | D17 | Cost guards, fastest first; Infracost | 0, 4 |
 | D18 | WebSocket connect tickets: authentication and the per-token cap | 6 |
 | D19 | Ticket verification and an atomic check-in at the gate | 6 |
-| D20 | Custom domain: Route 53, ACM, SES DKIM; stable QR URLs | 0–2 |
+| D20 | Custom domain — **deferred**; gaps accepted and listed | — |
 | D21 | Phase 3 seams: IAM trust as input, `TargetGroupBinding`, EKS subnet tags | 1, 7 |
 | D22 | Lambdas outside the VPC | 1 |
 | D23 | Terraform deploys the services, in stages | 3–4 |
@@ -483,13 +488,12 @@ record what that review changed and why, and stay as the reasoning.
   - The private alternative is EventBridge connections to a VPC Lattice resource configuration,
     which keeps the saga's traffic inside the VPC. It adds Lattice charges and a second path to
     reason about. Documented, not built.
-- *Review: TLS between the VPC link and the ALB, settled by D20.*
-  - Plain HTTP inside the VPC is common outside regulated workloads, but it was only ever
-    accepted for want of a certificate. A private CA costs about $400/month.
-  - With the domain (D20), the internal ALB gets a **free public ACM certificate** for an
-    internal name (e.g. `alb.internal.<domain>`), so the hop is **HTTPS end to end**.
-  - The slice-2 spike confirms which server name the private integration verifies against the
-    certificate.
+- *Review: HTTP between the VPC link and the ALB.*
+  - The hop is inside the private VPC, and the ALB's SG admits only the VPC link's SG. Plain
+    HTTP there is standard outside regulated workloads.
+  - TLS would need a certificate. A public ACM certificate needs a domain, which is deferred
+    (D20), and a private CA costs about $400/month.
+  - HTTPS end to end is the first change if D20 comes back.
 - *Fallback, if the spike fails.* An internet-facing ALB *plus* the edge header in SSM
   SecureString. To be honest about it, restricting the ALB's SG to API Gateway's address ranges
   is **not** a security control: those ranges are shared with every AWS customer's API Gateway.
@@ -785,9 +789,49 @@ transit.** *Settled 2026-11-11.*
     because a 5-minute CI round trip per iteration is not worth it for resources destroyed the
     same evening.
 - *Review: the account itself.* Real teams never run workloads in an Organizations
-  *management* account, and they separate dev and prod into different accounts. Slice 0 checks
-  which kind this account is. If it is a management account, the first step is a member account
-  for the workload (Organizations is free). Multi-account Control Tower is out of scope (D27).
+  *management* account, and they separate dev and prod into different accounts.
+  *Changed 2026-11-13: the check found a management account (Identity Center had created the
+  organization), so the workload moved out before anything was built.*
+
+  | Account | Holds | Applied by |
+  |---|---|---|
+  | management | Organizations, IAM Identity Center, billing, SCPs, `infra/org/` state. **No workloads, no OIDC roles, no CI access** | the owner, by hand, admin permission set |
+  | `twr-dev` (OU `workloads`) | everything in `bootstrap`, `foundation` and `session` | the owner (slices 0–3), then CI (D14) |
+
+  - **Done by hand (2026-11-13):** `twr-dev` created with its own owner email and the default
+    `OrganizationAccountAccessRole`; OU `workloads`; centralised **root access management**
+    (root credentials management + privileged root actions), so `twr-dev` has **no root
+    credentials** at all and a root-only task runs as a short root session from the
+    management account; the owner's SSO user assigned `AdministratorAccess` on `twr-dev`;
+    local CLI profile `twr-dev` (the account id lives only in `~/.aws/config`).
+  - **`infra/org/`**, a small root applied from the management account, makes the rest code:
+    - the **SSO permission sets** and their assignments: day-to-day read + ECS Exec, and the
+      admin set for bootstrap and break-glass (the console-made assignment is imported);
+    - **SCPs on `workloads`** (free; they bind every principal in `twr-dev`, the pipeline roles
+      included):
+      - deny every region except `eu-central-1` and `us-east-1` (`NotAction` exempts global
+        services: IAM, STS, Organizations, Budgets, Cost Explorer, Support);
+      - deny `cloudtrail:StopLogging`/`DeleteTrail`/`UpdateTrail` and GuardDuty
+        detector deletion or disabling, except for the admin SSO role (`aws:PrincipalArn`
+        pattern), so a leaked pipeline credential cannot blind the audit trail;
+      - deny `organizations:LeaveOrganization`;
+      - deny any action by a member account's root user (defence in depth beside removed root
+        credentials), **except sessions started with `sts:AssumeRoot`** (`aws:AssumedRoot`).
+        *Found 2026-11-13:* the unconditional deny also blocked the centralised root
+        sessions, i.e. the only break-glass path;
+    - a **$1 budget filtered to the management account's own spend**: nothing should ever bill
+      there, so any spend is an action (D16's rule holds, unlike the retired zero-spend budget
+      in `twr-dev`, D17);
+    - its own small state bucket in the management account (the bootstrap pattern: local
+      state, then migrated). It never shares the `twr-dev` bucket, so neither account trusts the
+      other for state.
+  - **Wrong-account guard.** Each root's provider sets
+    `allowed_account_ids = [var.account_id]`, supplied at run time (locally from
+    `aws configure get sso_account_id --profile twr-dev`, in CI from a masked variable), never
+    a literal. An `AWS_PROFILE` left on the management account then fails at `plan`.
+  - **Phase 1 leftovers stay in the management account** until slice 1 destroys them; they are
+    not moved or imported.
+  - Multi-account Control Tower stays out of scope (D27).
 
 **D13. Secrets: no credential is ever a Terraform value.** *Settled 2026-11-11.*
 - **Where each kind lives.** Secrets Manager holds credentials that rotate or integrate with a
@@ -842,6 +886,11 @@ or ruleset**.* Both facts change this entry.
 
   The owner keeps an explicit bypass for emergencies, which is visible in the ruleset rather
   than implied.
+  - *Changed 2026-11-13: the owner keeps direct pushes to `main` while slice 0 is scaffolding.*
+    Until `bootstrap/` is applied, `main` carries no AWS trust, so nothing is lost. The ruleset
+    is created **before `bootstrap/` is applied**, not later: from then on a push to `main` can
+    reach AWS. The owner's bypass then keeps direct pushes possible for the owner alone,
+    recorded in the ruleset's bypass log, while CI tokens and anyone else need a PR.
 - *Review: four roles, split by what each can damage.* (The first draft had two. A review pass
   added `ci-images`: nothing else could push an image or record its digest.)
 
@@ -1058,7 +1107,11 @@ or ruleset**.* Both facts change this entry.
     brake.
   - *Review: the $1 zero-spend budget is retired.* With about $2.5–3/month standing, it would
     fire every month. That makes it an alarm with no action, which D16's rule forbids. Two
-    budgets remain, which also keeps Budgets free.
+    budgets remain, which also keeps Budgets free. (A $1 budget **does** fit the management
+    account, where nothing should bill; it lives in `infra/org/`, D12.)
+  - *Changed 2026-11-13: budgets email the owner directly* as an email subscriber, and also
+    notify `ops-alarms`. The slowest guard must not depend on a topic, its CMK grant and a
+    confirmed subscription all working at once.
 - *Review: Infracost on infrastructure PRs.* The free CLI prices the plan and posts the
   difference as a PR comment.
   - Infracost assumes resources run all month, which for `session` is exactly **the price of
@@ -1212,45 +1265,37 @@ fan-out.** *Settled 2026-11-11.*
   - **Concurrency proof:** N gate threads check in one ticket → exactly one admitted, N−1 told
     when and where. A test that races real threads, per CLAUDE.md.
 - **The QR URL needs a stable host.** Today the QR encodes `TICKET_VERIFY_BASE_URL`, which is
-  the `{api-id}.execute-api…` URL. An issued ticket outlives any API; if the API is ever
-  recreated, every printed ticket points nowhere. That is the strongest argument for D20.
+  the `{api-id}.execute-api…` URL. That is stable for as long as foundation exists, because the
+  REST API lives there (D5). It breaks only if foundation is rebuilt. A custom domain would make
+  it permanent; it is deferred (D20), with this gap accepted.
 - *Future, documented: offline and anti-screenshot QR.* Production ticketing signs the QR
   (verifiable at a gate with no network) and rotates it every few seconds from a per-ticket
   secret, so a screenshot expires. That needs an asymmetric KMS key and a client app.
   Online check-in plus the atomic `UPDATE` already defeats the screenshot *at the gate*, which
   is the part this project exists to show.
 
-**D20. Custom domain: Route 53 + ACM + SES DKIM.** *Settled 2026-11-11 (owner opted in).*
-- *Review: this stopped being optional vanity.* Four decisions now point at it:
-  1. **Stable ticket URLs** (D19): a custom domain on the REST API (`api.<domain>`) is the URL
-     printed in every QR, independent of the API id. It also takes the API id out of anything
-     a buyer sees.
-  2. **Email that arrives**: SES domain identity with **DKIM, SPF and DMARC**, today's
-     deliverability baseline. Address identities only gate *sending*; purchase confirmations
-     currently land in spam (retro §7).
-  3. **TLS to the internal ALB** (D5): a public ACM certificate for an internal name, free, with
-     no private CA.
-  4. **ACM and Route 53 earn their place** in CLAUDE.md's service list through real problems,
-     not through coverage.
-- **Shape.** Register the domain through Route 53. The hosted zone lives in foundation, and
-  ACM certificates are validated by DNS records Terraform writes. The domain name is a
-  **variable**; it is the owner's choice and fine to commit (like the owner's email).
-- *Cost:* hosted zone $0.50/month standing, plus the registration, $3–5 for the cheapest
-  suitable TLDs. With it, the phase estimate is **≈ $18–20**, at the budget rather than under it.
-  §6 lists the levers.
-- **Order matters: the domain comes first, not last.** The QR base URL, the SES identity and
-  the ALB certificate all depend on it, and every ticket issued before the switch would carry
-  the old URL. So:
-  - the owner **registers the domain in slice 0**. It is a purchase, so the owner does it, not
-    Terraform;
-  - foundation owns the hosted zone, certificates and SES records from slice 1;
-  - the custom domain is live from the first edge session in slice 2.
-- **One import-free step.** Route 53 registration creates its own hosted zone. Delete that zone
-  and let Terraform create one, pointing the registration's name servers at it with
-  `aws_route53domains_registered_domain`. That keeps the destroy-don't-import rule, and the
-  domain's DNS lives entirely in code.
-- **SES production access** (leaving the sandbox) is a one-time request to AWS. Until it is
-  granted, confirmations reach only verified addresses, which is enough for the proofs.
+**D20. Custom domain (Route 53 + ACM + SES DKIM).** *Deferred 2026-11-11 by the owner, to keep
+budget margin under $20. Earlier the same day it had been settled as opted in.*
+- **What it would solve, and what happens instead.** These are accepted gaps, written down so
+  they read as decisions, not oversights:
+
+  | Problem | With a domain | Phase 2 without one (accepted) |
+  |---|---|---|
+  | Email deliverability | SES domain identity with DKIM/SPF/DMARC, so mail reaches the inbox | SES address identities and the sandbox. Mail reaches only verified addresses and may land in spam. The proofs only need verified addresses |
+  | TLS from the VPC link to the ALB | free public ACM certificate on the internal ALB | **plain HTTP inside the private VPC.** The ALB admits only the VPC link's SG (D5). Common outside regulated workloads; a private CA (~$400/month) is not worth it |
+  | QR URL | `https://api.<domain>/tickets/<id>`, stable forever, no API id visible | `{api-id}.execute-api…/dev/tickets/<id>`. It is **stable for the life of foundation**, because the REST API lives there (D5) and survives every session; it changes only if foundation itself is rebuilt |
+
+- **Cost avoided:** about $3–5 for registration plus $0.50/month for the hosted zone. That takes
+  the phase estimate from ≈ $18–20 down to ≈ **$15–17** (§6).
+- **What would bring it back:** a frontend (CloudFront needs a certificate and a name), real
+  users receiving email, or Phase 3. The design notes stay valid:
+  - register by hand, then let Terraform own the hosted zone via
+    `aws_route53domains_registered_domain`, with no import;
+  - domain first, before any ticket is issued, so no QR carries the old URL;
+  - SES production access is a one-time request.
+- *Consequence for the identifier rule (CLAUDE.md):* QR codes generated in sessions embed the API
+  id. They are runtime artefacts in S3, never committed, so the rule is not affected. Screenshots
+  of QR codes in docs must blur or replace the host with `<rest-api-id>`.
 
 **D21. Phase 3 seam: make the modules compute-agnostic now.** *Settled 2026-11-11.*
 - **Carried.** ECS services and task definitions live in `modules/ecs-service` and own nothing
@@ -1347,8 +1392,10 @@ The rule in `modules/lambda-function`: a Lambda joins the VPC only to reach RDS 
   - **Security Hub CSPM.** It bills per check and aggregates findings from services this account
     mostly does not run. It is worth it with Config and several accounts.
   - **Control Tower / multi-account landing zone.** It is the production shape; this is one
-    workload in one account. The D12 check (not the management account) is the part that
-    matters.
+    workload in one member account. The part that matters is already in place (D12): no
+    workloads in the management account, root credentials removed, guardrail SCPs from
+    `infra/org/`. Control Tower would add a log-archive and an audit account, and AWS Config
+    in each, which is exactly the Config cost ruled out below.
   - **A service mesh / Service Connect.** There are no east-west calls (D7).
   - **CodeDeploy blue/green.** Rolling deploys with a circuit breaker are the ECS default.
     Progressive delivery arrives with Argo Rollouts in Phase 3.
@@ -1374,38 +1421,40 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 `teardown-sweep.sh` → (f) tick boxes, note findings here.**
 
 ### 0. Bootstrap and guardrails — $0
-- [ ] Re-price every session component from the Price List API; correct §6
-- [ ] Confirm provider support for regional NAT mode (D4)
-- [ ] Check whether this account is an Organizations management account; if so, create a member account for the workload first (D12)
-- [ ] SSO permission sets: day-to-day read + ECS Exec, separate admin for bootstrap and break-glass (D12)
-- [ ] `infra/` layout and module conventions (D1), `.terraform-version`, multi-platform provider lock, `.tflint.hcl`
-- [ ] `.githooks/pre-commit` extended with `terraform fmt -check`; `.github/dependabot.yml` (D2)
-- [ ] **Ruleset on `main`** (PR, required checks, linear history, no force-push) — before any OIDC role exists (D14)
+- [x] Re-price every session component from the Price List API; correct §6 — 2026-11-13: only RDS moved ($0.018 → $0.019/h)
+- [x] Confirm provider support for regional NAT mode (D4) — AWS provider 6.73: `aws_nat_gateway.availability_mode`; also `aws_api_gateway_integration.integration_target` for REST → ALB over VPC Link v2 (D5)
+- [x] Account check: it was the management account → member account `twr-dev` in OU `workloads`, root access management on, SSO assignment, CLI profile — by hand, 2026-11-13 (D12)
+- [x] `infra/org/` (management account, own state bucket): SSO permission sets (day-to-day read + ECS Exec; admin for bootstrap and break-glass) with the console assignment imported; SCPs on `workloads`; management-account $1 budget; check a privileged root action still works with the root-deny SCP attached (D12) — applied 2026-11-13; the root check failed first and the SCP now exempts `aws:AssumedRoot`; CLI profile `twr-dev-readonly`
+- [ ] Delete the two Phase 1 console budgets in the management account (`My Monthly Cost Budget`, `My Zero-Spend Budget`; both org-wide) **once twr-dev's budgets exist** — the zero-spend one would fire every month (D17)
+- [x] `infra/` layout and module conventions (D1), `.terraform-version`, multi-platform provider lock, `.tflint.hcl`, `allowed_account_ids` from a run-time variable in every root (D12) — Terraform 1.17.2, AWS provider `~> 6.73`, `infra/scripts/tf-env.sh` + `tf-init.sh`, `infra/README.md`
+- [x] `.githooks/pre-commit` extended with `terraform fmt -check`; `.github/dependabot.yml` (D2) — weekly, grouped, 7-day cooldown
+- [ ] Minimal `ci.yml`: Gradle build + a `terraform` job (`fmt -check`, `validate`, `tflint`, no AWS credentials), so the ruleset has checks to require; slice 4 grows it (D14) — written, actions pinned to SHAs; ticked after its first green run on GitHub
+- [ ] **Ruleset on `main`** (PR, required checks from the minimal `ci.yml`, linear history, no force-push, owner bypass) — **before `bootstrap/` is applied**; direct pushes until then (D14, changed 2026-11-13)
 - [ ] `bootstrap/`: state bucket (versioned, SSE, public access blocked, `use_lockfile`), OIDC provider with `job_workflow_ref` in `sub`, the four roles, the permissions boundary; repo default `GITHUB_TOKEN` read-only (D14)
-- [ ] `modules/budgets` (actual + forecasted alerts, Phase 2 custom period), Cost Anomaly Detection; `project`/`stack`/`env` cost-allocation tags activated **before the first session** (D17)
+- [ ] Foundation skeleton, applied locally: `kms` (key policy with the CloudWatch, Budgets and anomaly grants, D11) and `ops-alarms` topic on the CMK, email subscription **confirmed by click** — slice 0's GuardDuty and CloudTrail alerts need a target (D16)
+- [ ] `modules/budgets` (actual + forecasted alerts, Phase 2 custom period, owner email as a **direct** subscriber as well as `ops-alarms`), Cost Anomaly Detection; `project`/`stack`/`env` cost-allocation tags activated **before the first session** (D17)
 - [ ] GuardDuty on (foundational only), Medium+ findings → `ops-alarms`; read the trial's cost estimate at day 30 (D27)
 - [ ] CloudTrail trail (multi-region, management events, log validation) + EventBridge alerts: root sign-in and IAM change in **us-east-1** (aliased provider, forwarded to eu-central-1), KMS disable/deletion regional (D24)
 - [ ] `docs/adr/` with the MADR template (D26)
-- [ ] **Owner registers the domain** in Route 53 (a purchase, done by hand); request SES production access (D20)
 - **Learn:** state, locking, OIDC trust conditions (`sub` claim scoping)
 
 ### 1. Foundation — ≈ $2.5–3/month standing
-- [ ] `network` (no NAT, flow logs → S3), `kms` (producer grants, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push)
+- [ ] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push)
 - [ ] `messaging`: queues, DLQs, `redrive_allow_policy`, derived visibility timeouts, `raw_message_delivery`
 - [ ] `identity` (Cognito, deletion protection, scanner client + `ticketing/gate` scope), `iam` (permissions separate from trust, every role, confused-deputy conditions, boundary attached), Access Analyzer
-- [ ] `dns`: hosted zone (registration's name servers pointed at it), ACM certificates, API custom domain name, SES domain identity + DKIM/SPF/DMARC; `qr-generation` verify base URL = `https://api.<domain>` (D20)
+- [ ] SES address identities; `qr-generation` verify base URL from the REST API's invoke URL (a reference, never typed)
 - [ ] `terraform test` for messaging, dynamodb, lambda-function, kms grants (D2)
 - [ ] `lambda-function` ×3 (arm64, log groups with retention, `ReportBatchItemFailures`, ESM `enabled = true`)
 - [ ] `websocket-api` (`integration_response_key = "/200/"`), `rest-api` resources + deployment `triggers`
-- [ ] `observability`: log groups, dashboard from `templatefile()`, saved Logs Insights queries, foundation alarms with `treat_missing_data` pinned, `ops-alarms` topic on the CMK with CloudWatch/Budgets/anomaly grants; email subscription **confirmed by click** (D16)
+- [ ] `observability`: log groups, dashboard from `templatefile()`, saved Logs Insights queries, foundation alarms with `treat_missing_data` pinned, on the `ops-alarms` topic from slice 0 (D16)
 - [ ] Data protection: DynamoDB PITR + deletion protection, Cognito deletion protection, ECR immutable tags (D24)
-- [ ] Verify: QR + hold-cleanup by direct invoke (the QR encodes the custom domain); second plan clean; sweep TAGS tier lists only Terraform-tagged resources; Access Analyzer shows no findings; SES DKIM status *verified*
-- [ ] **Destroy the Phase 1 resources** — checklist reviewed with the owner first (nothing wanted: images rebuilt by CI, users by `create-test-users.sh`). No longer blocking, since the `twr-dev-` names do not collide (D25)
+- [ ] Verify: QR + hold-cleanup by direct invoke; second plan clean; sweep TAGS tier lists only Terraform-tagged resources; Access Analyzer shows no findings
+- [ ] **Destroy the Phase 1 resources in the management account** (`--profile default`; then `teardown-sweep.sh` there too) — checklist reviewed with the owner first (nothing wanted: images rebuilt by CI, users by `create-test-users.sh`). No longer blocking, since the `twr-dev-` names do not collide (D25)
 - **Learn:** module boundaries, SSM as stack interface
 
 ### 2. Session edge + seat inventory — ≈ $0.13/h
 - [ ] **Spike D5** (VPC Link v2 for REST → internal ALB, provider argument for the target) and **D6** (is JA4 computed for a REST-stage ACL?)
-- [ ] NAT, internal ALB (HTTPS with the foundation certificate), VPC link + private integration, REST stage + base-path mapping on `api.<domain>`, method throttling, WAF (buyer rules on queue join + purchase, baseline in count mode, logging to S3, D6)
+- [ ] NAT, internal ALB, VPC link + private integration, REST stage, method throttling, WAF (buyer rules on queue join + purchase, baseline in count mode, logging to S3, D6)
 - [ ] `ecs-service` module with autoscaling; seat-inventory on ARM64 / Spot
 - [ ] Saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5)
 - [ ] Verify: `k6/seat-race.js` through the edge → exactly one winner per seat; flow logs show DynamoDB and ECR layer traffic **not** via the NAT; WAF baseline sampled requests reviewed → block
@@ -1441,7 +1490,6 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - [ ] D18 spike: `TransactWriteItems` via the `$connect` service integration, refused handshake on a cancelled transaction; then the socket-ticket endpoint + race test + route throttling
 - [ ] D19 verification endpoint, `ticketing/gate` scope + scanner client, atomic check-in + race test
 - [ ] Step Functions X-Ray segment (retro §7)
-- [ ] Verify (D20): a purchase-confirmation email lands in the **inbox**, not spam, with DKIM `pass` in its headers
 
 ### 7. Phase 3 seam + retro — $0
 - [ ] Confirm `ecs-service` owns nothing else; IAM trust as an input; app subnets carry the EKS tags; sketch `live/eks` (D21)
@@ -1450,13 +1498,13 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 
 ---
 
-## 6. Cost Estimate (eu-central-1, to be re-priced in slice 0)
+## 6. Cost Estimate (eu-central-1, re-priced 2026-11-13 from the Price List API)
 
 | Component | Hourly while up | Notes |
 |---|---|---|
 | NAT Gateway + EIP | ≈ $0.057 | + $0.052/GB processed; S3/DynamoDB bypass it |
 | Internal ALB | ≈ $0.03 | incl. a few LCUs |
-| RDS `db.t4g.micro` | ≈ $0.018 | single AZ |
+| RDS `db.t4g.micro` | ≈ $0.019 | single AZ |
 | Valkey `cache.t4g.micro` | ≈ $0.014 | |
 | Fargate ARM, 0.25 vCPU / 0.5 GB | ≈ $0.011 per task (Spot ≈ $0.004) | feature slices, 5 tasks |
 | Fargate ARM, 0.5 vCPU / 1 GB | ≈ $0.022 per task | proof run only, 10 tasks + autoscaling |
@@ -1464,16 +1512,24 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 | Secrets Manager (4 secrets, incl. the EventBridge connection's) | < $0.003 | |
 | **Full session** | **≈ $0.25–0.35** (proof run ≈ $0.45) | slices 1–3 run lighter through toggles |
 
+*Re-priced 2026-11-13* (Price List API, EU (Frankfurt)): NAT $0.052/h + public IPv4 $0.005/h;
+ALB $0.027/h + $0.008/LCU-h; RDS `db.t4g.micro` PostgreSQL Single-AZ $0.019/h (was $0.018);
+Valkey `cache.t4g.micro` $0.0144/h; Fargate ARM $0.03725/vCPU-h + $0.00409/GB-h; WAF $5/ACL +
+$1/rule + $10 Bot Control per month, prorated hourly; Secrets Manager $0.40/secret-month; KMS
+$1/key-month; REST API $3.70/M requests. **No line item for a VPC link**: it is free, as D5
+assumed. A regional NAT Gateway is listed at the same $0.052/h; whether that is per gateway or
+per active AZ is read from the NAT pricing page before it is ever built. The totals below are
+unchanged.
+
 | Bucket | Estimate |
 |---|---|
 | ~40 session-hours across slices 2–6, averaging ≈ $0.22/h because most sessions are partial stacks (slice 2: edge + one service; slice 6: no WAF) | $9–11 |
 | ≈ 5 of those hours as full proof runs (≈ $0.45/h) | +$1–1.5 |
-| Standing ~2 months (KMS $1, hosted zone $0.50, alarms ≤ $1, GuardDuty < $1 after trial, ECR ~$0.2, S3 pennies) | $5–6 |
-| Domain registration (D20), cheapest suitable TLD | $3–5 |
-| **Phase 2 total** | **≈ $18–20** (budget: $20) |
+| Standing ~2 months (KMS $1, alarms ≈ $0.60, GuardDuty < $1 after trial, ECR ~$0.2, S3 pennies) | $4–5 |
+| **Phase 2 total** | **≈ $15–17** (budget: $20) |
 
-**Honest reading:** with the domain, the plan sits at the budget, not under it. The levers if
-§6 drifts high, in order:
+**Honest reading:** with the domain deferred (D20), there is about $3–5 of margin. If §6 drifts
+high anyway, the levers, in order:
 1. shorter sessions (the reaper's default `expires_at` from 4 h to 2 h);
 2. WAF only in the slices that prove it (2 and 5); it is a third of a full session's hourly cost;
 3. the proof run on Spot with `base = 0`.
@@ -1487,6 +1543,7 @@ those levers.
 - Interface VPC endpoints (cost more than NAT at this scale)
 - CodeDeploy blue/green (ECS rolling + circuit breaker is the standard default; revisit in Phase 3 with Argo Rollouts)
 - CloudFront + frontend (no frontend exists yet)
+- Custom domain, Route 53, ACM, SES DKIM — deferred, gaps accepted (D20)
 - Multiple environments (`dev`/`prod`): one environment, toggled; the layout and naming (D25) leave room for `live/<env>/`
 - AWS Config, Security Hub, Control Tower, a service mesh, multi-region — reasons in D27
 - RDS Proxy, IAM database authentication — reasons in D9

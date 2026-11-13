@@ -9,8 +9,8 @@ from diagrams.aws.compute import ECR
 from diagrams.aws.cost import Budgets
 from diagrams.aws.devtools import CommandLineInterface
 from diagrams.aws.general import GenericSamlToken
-from diagrams.aws.management import SystemsManagerParameterStore
-from diagrams.aws.security import IAMRole
+from diagrams.aws.management import Organizations, SystemsManagerParameterStore
+from diagrams.aws.security import IAMRole, SingleSignOn
 from diagrams.aws.storage import S3
 from diagrams.onprem.ci import GithubActions
 from diagrams.onprem.iac import Terraform
@@ -39,6 +39,10 @@ with Diagram(
 ):
     owner = CommandLineInterface("owner\nSSO session\n(bootstrap only)")
 
+    with Cluster("management account — no workloads, no CI"):
+        idc = SingleSignOn("IAM Identity Center\npermission sets")
+        scp = Organizations("SCPs on OU workloads\ninfra/org (by hand)")
+
     with Cluster("GitHub — public repo, account id masked in logs"):
         repo = Github("repo\nruleset-protected main")
         with Cluster("workflows"):
@@ -47,7 +51,7 @@ with Diagram(
             session = GithubActions("session\napply → migrate →\nsmoke → destroy")
             reaper = GithubActions("session-reaper (hourly)\ndestroy after expires_at\n+ drift (nightly)")
 
-    with Cluster("AWS account"):
+    with Cluster("member account twr-dev (OU workloads)"):
         oidc = GenericSamlToken("IAM OIDC provider\ntoken.actions.githubusercontent.com")
         images_role = IAMRole("ci-images\nECR push + /images/* only")
         plan_role = IAMRole("tf-plan\nPRs + drift, no data-plane reads")
@@ -57,7 +61,7 @@ with Diagram(
         state = S3("state bucket\nversioned, use_lockfile")
         ecr = ECR("ECR")
         ssm = SystemsManagerParameterStore("SSM parameters\n/twr/dev/foundation/*")
-        budgets = Budgets("budgets\n$10/mo · $20 phase · $1")
+        budgets = Budgets("budgets\n$10/mo · $20 phase\n→ owner email")
         with Cluster("bootstrap (local state, then migrated)"):
             bootstrap = Terraform("bootstrap root")
         with Cluster("foundation — ≈ $2.5–3/month standing"):
@@ -65,7 +69,9 @@ with Diagram(
         with Cluster("session — ≈ $0.30/h, toggles"):
             sess = Terraform("session root")
 
-    owner >> Edge(label="terraform apply, once") >> bootstrap
+    owner >> Edge(label="SSO") >> idc
+    idc >> Edge(label="admin (slices 0–3)\nterraform apply") >> bootstrap
+    scp >> Edge(style="dotted", label="bounds every principal") >> oidc
     bootstrap >> [state, oidc, images_role, plan_role, apply_f, apply_s]
     repo >> [ci, tf, session]
     ci >> Edge(label="OIDC images.yml@main") >> images_role
