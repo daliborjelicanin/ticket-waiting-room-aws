@@ -26,3 +26,9 @@ variable "alert_email" {
   type        = string
   default     = "jelicanindalibor@gmail.com"
 }
+
+variable "activate_cost_allocation_tags" {
+  description = "Set true once project/stack/env appear in Billing > Cost allocation tags (about 24 h after twr-dev's first tagged resources)."
+  type        = bool
+  default     = false
+}

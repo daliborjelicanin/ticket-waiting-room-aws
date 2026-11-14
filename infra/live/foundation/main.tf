@@ -45,3 +45,9 @@ module "audit" {
   ops_alarms_topic_arn     = module.observability.ops_alarms_topic_arn
   permissions_boundary_arn = data.aws_iam_policy.boundary.arn
 }
+
+module "network" {
+  source = "../../modules/network"
+
+  name_prefix = local.name_prefix
+}

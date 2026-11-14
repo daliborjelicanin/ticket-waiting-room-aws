@@ -52,10 +52,13 @@ jobs:
           terraform_wrapper: false
       - name: fmt
         run: terraform fmt -check -recursive -diff
-      - name: validate every root and module
+      # Roots only: a root validates every module it calls, with the providers it passes in.
+      # A module validated on its own cannot receive an aliased provider (modules/audit takes
+      # aws.us_east_1), so it fails for a reason that is not a defect.
+      - name: validate every root
         run: |
           set -euo pipefail
-          for dir in $(find . -name '*.tf' -not -path '*/.terraform/*' -printf '%h\n' | sort -u); do
+          for dir in $(find . -name 'providers.tf' -not -path '*/.terraform/*' -printf '%h\n' | sort -u); do
             echo "::group::$dir"
             # Roots commit their lock file and must match it; modules have none (the root pins).
             lock=(); [ -f "$dir/.terraform.lock.hcl" ] && lock=(-lockfile=readonly)

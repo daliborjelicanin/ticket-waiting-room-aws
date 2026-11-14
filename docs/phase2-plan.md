@@ -1442,7 +1442,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - **Learn:** state, locking, OIDC trust conditions (`sub` claim scoping)
 
 ### 1. Foundation — ≈ $2.5–3/month standing
-- [ ] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push)
+- [ ] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push) — *`network` applied 2026-11-14 (94 resources, $0; second plan clean); the rest open*
 - [ ] `messaging`: queues, DLQs, `redrive_allow_policy`, derived visibility timeouts, `raw_message_delivery`
 - [ ] `identity` (Cognito, deletion protection, scanner client + `ticketing/gate` scope), `iam` (permissions separate from trust, every role, confused-deputy conditions, boundary attached), Access Analyzer
 - [ ] SES address identities; `qr-generation` verify base URL from the REST API's invoke URL (a reference, never typed)
