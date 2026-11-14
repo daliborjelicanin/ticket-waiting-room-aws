@@ -920,6 +920,10 @@ or ruleset**.* Both facts change this entry.
   in a PR that later merges. This is set once in bootstrap
   (`PUT /repos/{owner}/{repo}/actions/oidc/customization/sub`), and the trust policies match the
   full string. Never a wildcard on the repository.
+  - *Found 2026-11-13:* GitHub issues the **immutable** subject for this repository:
+    `repo:<owner>@<owner-id>/<repo>@<repo-id>:…`. The numeric ids make a deleted-and-recreated
+    repository with the same name unable to assume the roles. The trust policies use that
+    prefix, and the first OIDC run (slice 4) prints its claims before any apply relies on it.
 - *Review: Actions supply-chain baseline.*
   - **Third-party actions are pinned to a full commit SHA**, with the version as a comment. A
     moved tag on a popular action leaking secrets from every workflow that used it (March 2025)
@@ -1425,17 +1429,16 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - [x] Confirm provider support for regional NAT mode (D4) — AWS provider 6.73: `aws_nat_gateway.availability_mode`; also `aws_api_gateway_integration.integration_target` for REST → ALB over VPC Link v2 (D5)
 - [x] Account check: it was the management account → member account `twr-dev` in OU `workloads`, root access management on, SSO assignment, CLI profile — by hand, 2026-11-13 (D12)
 - [x] `infra/org/` (management account, own state bucket): SSO permission sets (day-to-day read + ECS Exec; admin for bootstrap and break-glass) with the console assignment imported; SCPs on `workloads`; management-account $1 budget; check a privileged root action still works with the root-deny SCP attached (D12) — applied 2026-11-13; the root check failed first and the SCP now exempts `aws:AssumedRoot`; CLI profile `twr-dev-readonly`
-- [ ] Delete the two Phase 1 console budgets in the management account (`My Monthly Cost Budget`, `My Zero-Spend Budget`; both org-wide) **once twr-dev's budgets exist** — the zero-spend one would fire every month (D17)
 - [x] `infra/` layout and module conventions (D1), `.terraform-version`, multi-platform provider lock, `.tflint.hcl`, `allowed_account_ids` from a run-time variable in every root (D12) — Terraform 1.17.2, AWS provider `~> 6.73`, `infra/scripts/tf-env.sh` + `tf-init.sh`, `infra/README.md`
 - [x] `.githooks/pre-commit` extended with `terraform fmt -check`; `.github/dependabot.yml` (D2) — weekly, grouped, 7-day cooldown
-- [ ] Minimal `ci.yml`: Gradle build + a `terraform` job (`fmt -check`, `validate`, `tflint`, no AWS credentials), so the ruleset has checks to require; slice 4 grows it (D14) — written, actions pinned to SHAs; ticked after its first green run on GitHub
-- [ ] **Ruleset on `main`** (PR, required checks from the minimal `ci.yml`, linear history, no force-push, owner bypass) — **before `bootstrap/` is applied**; direct pushes until then (D14, changed 2026-11-13)
-- [ ] `bootstrap/`: state bucket (versioned, SSE, public access blocked, `use_lockfile`), OIDC provider with `job_workflow_ref` in `sub`, the four roles, the permissions boundary; repo default `GITHUB_TOKEN` read-only (D14)
-- [ ] Foundation skeleton, applied locally: `kms` (key policy with the CloudWatch, Budgets and anomaly grants, D11) and `ops-alarms` topic on the CMK, email subscription **confirmed by click** — slice 0's GuardDuty and CloudTrail alerts need a target (D16)
-- [ ] `modules/budgets` (actual + forecasted alerts, Phase 2 custom period, owner email as a **direct** subscriber as well as `ops-alarms`), Cost Anomaly Detection; `project`/`stack`/`env` cost-allocation tags activated **before the first session** (D17)
-- [ ] GuardDuty on (foundational only), Medium+ findings → `ops-alarms`; read the trial's cost estimate at day 30 (D27)
-- [ ] CloudTrail trail (multi-region, management events, log validation) + EventBridge alerts: root sign-in and IAM change in **us-east-1** (aliased provider, forwarded to eu-central-1), KMS disable/deletion regional (D24)
-- [ ] `docs/adr/` with the MADR template (D26)
+- [x] Minimal `ci.yml`: Gradle build + a `terraform` job (`fmt -check`, `validate`, `tflint`, no AWS credentials), so the ruleset has checks to require; slice 4 grows it (D14) — green on GitHub 2026-11-13 (`gradle`, `terraform`)
+- [x] **Ruleset on `main`** (PR, required checks from the minimal `ci.yml`, linear history, no force-push, owner bypass) — **before `bootstrap/` is applied**; direct pushes until then (D14, changed 2026-11-13) — 2026-11-13 by `gh api`, with: default `GITHUB_TOKEN` read-only, OIDC `sub` customised, environments `foundation` (reviewer) and `session`
+- [x] `bootstrap/`: state bucket (versioned, SSE, public access blocked, `use_lockfile`), OIDC provider with `job_workflow_ref` in `sub`, the four roles, the permissions boundary; repo default `GITHUB_TOKEN` read-only (D14) — applied 2026-11-14 (20 resources), state migrated to the bucket, second plan clean; the read-only permission set is refused the state (403)
+- [x] *(applied 2026-11-14; email subscription confirmed and a test message published 2026-11-14)* Foundation skeleton, applied locally: `kms` (key policy with the CloudWatch, Budgets and anomaly grants, D11) and `ops-alarms` topic on the CMK, email subscription **confirmed by click** — slice 0's GuardDuty and CloudTrail alerts need a target (D16)
+- [x] `modules/budgets` (actual + forecasted alerts, Phase 2 custom period, owner email as a **direct** subscriber as well as `ops-alarms`), Cost Anomaly Detection; `project`/`stack`/`env` cost-allocation tags activated **before the first session** (D17) — applied 2026-11-14 (`CUSTOM` time unit accepted for the phase budget); the tags moved to `infra/org/cost_tags.tf` because activation is a payer-account setting: flip `activate_cost_allocation_tags` ≈ 24 h after the first tagged resources
+- [x] GuardDuty on (foundational only), Medium+ findings → `ops-alarms`; read the trial's cost estimate at day 30 (D27) — applied 2026-11-14; **read the usage estimate on 2026-12-14**
+- [x] CloudTrail trail (multi-region, management events, log validation) + EventBridge alerts: root sign-in and IAM change in **us-east-1** (aliased provider, forwarded to eu-central-1), KMS disable/deletion regional (D24) — applied 2026-11-14, trail logging, 2 rules in us-east-1; second foundation plan clean
+- [x] `docs/adr/` with the MADR template (D26) — `0000-template.md` + index of the eight
 - **Learn:** state, locking, OIDC trust conditions (`sub` claim scoping)
 
 ### 1. Foundation — ≈ $2.5–3/month standing

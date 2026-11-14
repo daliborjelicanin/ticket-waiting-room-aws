@@ -20,3 +20,15 @@ variable "env" {
   type        = string
   default     = "dev"
 }
+
+variable "github_repository" {
+  description = "owner/name of the repository whose workflows may assume the CI roles (D14). Public, so committable."
+  type        = string
+  default     = "daliborjelicanin/ticket-waiting-room-aws"
+}
+
+variable "github_oidc_sub_prefix" {
+  description = "The repository's OIDC sub prefix, as GET /repos/{repo}/actions/oidc/customization/sub returns it. Immutable form: owner and repo numeric ids are included, so a deleted-and-recreated repository with the same name cannot assume these roles (D14). Public GitHub ids, not AWS identifiers."
+  type        = string
+  default     = "repo:daliborjelicanin@67155304/ticket-waiting-room-aws@1411760078"
+}

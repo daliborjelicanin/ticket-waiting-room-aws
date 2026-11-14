@@ -20,3 +20,21 @@ variable "env" {
   type        = string
   default     = "dev"
 }
+
+variable "alert_email" {
+  description = "Owner's address for ops-alarms and budgets (committable: CLAUDE.md, Secrets and Identifiers)."
+  type        = string
+  default     = "jelicanindalibor@gmail.com"
+}
+
+variable "phase2_start" {
+  description = "First day of the Phase 2 cumulative budget (D17)."
+  type        = string
+  default     = "2026-11-01"
+}
+
+variable "phase2_end" {
+  description = "Last day of the Phase 2 cumulative budget (D17); moved if the phase runs longer."
+  type        = string
+  default     = "2027-04-30"
+}
