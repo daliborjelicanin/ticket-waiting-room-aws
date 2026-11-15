@@ -224,5 +224,5 @@ module "iam" {
   collector_config_parameter = local.collector_config_parameter
   db                         = local.db
   saga_state_machine_name    = local.saga_state_machine_name
-  ses_from_address           = var.alert_email
+  ses_from_address           = local.ses_sender
 }

@@ -26,6 +26,8 @@ locals {
       "cognito/token_url"            = module.identity.token_url
       "cognito/user_pool_id"         = module.identity.user_pool_id
       "cognito/web_client_id"        = module.identity.web_client_id
+      "ses/from_address"             = local.ses_sender
+      "ses/fallback_recipient"       = local.ses_recipients[0]
     },
     { for k, id in module.identity.m2m_client_ids : "cognito/${k}_client_id" => id },
     { for k, arn in module.iam.role_arns : "iam/role/${k}" => arn },
