@@ -13,3 +13,9 @@ variable "alarm_publishers" {
     "events.amazonaws.com",
   ]
 }
+
+variable "sqs_delivering_topics" {
+  description = "Names of SNS topics that deliver to CMK-encrypted SQS queues; each needs GenerateDataKey + Decrypt on this key (D11)."
+  type        = list(string)
+  default     = []
+}

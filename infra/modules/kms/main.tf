@@ -6,6 +6,12 @@ data "aws_caller_identity" "current" {}
 
 data "aws_partition" "current" {}
 
+locals {
+  account_id = data.aws_caller_identity.current.account_id
+}
+
+data "aws_region" "current" {}
+
 data "aws_iam_policy_document" "key" {
   # Keep IAM in charge of the key. Without this statement a typo below can make the key
   # unmanageable: the classic KMS lockout (D11).
@@ -36,6 +42,32 @@ data "aws_iam_policy_document" "key" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  # SNS delivering into a CMK-encrypted queue encrypts as SNS, so the topic needs the key.
+  # Without this the message is dropped and the publisher still sees success (D11). Topic
+  # ARNs are built from their deterministic names (D25), so the key does not depend on the
+  # topics it protects.
+  dynamic "statement" {
+    for_each = length(var.sqs_delivering_topics) > 0 ? [1] : []
+
+    content {
+      sid       = "TopicsDeliverToEncryptedQueues"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+      resources = ["*"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["sns.amazonaws.com"]
+      }
+
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:SourceArn"
+        values = [for t in var.sqs_delivering_topics :
+        "arn:${data.aws_partition.current.partition}:sns:${data.aws_region.current.region}:${local.account_id}:${t}"]
+      }
     }
   }
 }

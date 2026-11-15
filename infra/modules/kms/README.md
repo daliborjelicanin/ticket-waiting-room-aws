@@ -29,6 +29,7 @@ No modules.
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.key](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
 ## Inputs
 
@@ -36,6 +37,7 @@ No modules.
 |------|-------------|------|---------|:--------:|
 | <a name="input_alarm_publishers"></a> [alarm\_publishers](#input\_alarm\_publishers) | Service principals that publish to the CMK-encrypted ops-alarms topic and so need GenerateDataKey + Decrypt on this key (D11, D16). | `list(string)` | <pre>[<br/>  "budgets.amazonaws.com",<br/>  "cloudwatch.amazonaws.com",<br/>  "costalerts.amazonaws.com",<br/>  "events.amazonaws.com"<br/>]</pre> | no |
 | <a name="input_name"></a> [name](#input\_name) | Alias name without the alias/ prefix, e.g. twr-dev. | `string` | n/a | yes |
+| <a name="input_sqs_delivering_topics"></a> [sqs\_delivering\_topics](#input\_sqs\_delivering\_topics) | Names of SNS topics that deliver to CMK-encrypted SQS queues; each needs GenerateDataKey + Decrypt on this key (D11). | `list(string)` | `[]` | no |
 
 ## Outputs
 

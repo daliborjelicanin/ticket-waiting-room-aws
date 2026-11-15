@@ -7,12 +7,24 @@ data "aws_iam_policy" "boundary" {
 
 locals {
   name_prefix = "twr-${var.env}"
+
+  # Lambda timeouts, in seconds: the lambda-function calls use them, and so do the visibility
+  # timeouts of the queues feeding those functions (6x, retro §3). One number, two places.
+  lambda_timeouts = {
+    qr-generation  = 60
+    queue-notifier = 30
+  }
+
+  # Topics that deliver into CMK-encrypted queues; the key grants them (D11). Named here
+  # once, so the key policy and the topic cannot disagree.
+  sqs_delivering_topics = ["purchase-confirmed"]
 }
 
 module "kms" {
   source = "../../modules/kms"
 
-  name = local.name_prefix
+  name                  = local.name_prefix
+  sqs_delivering_topics = [for t in local.sqs_delivering_topics : "${local.name_prefix}-${t}"]
 }
 
 module "observability" {
@@ -105,4 +117,50 @@ module "ecr" {
     "qr-generation-lambda",
     "queue-socket-lambda",
   ]
+}
+
+# --- messaging (D11, retro §3) --------------------------------------------------------------
+# Producers and consumers, with the Phase 1 numbers they reproduce:
+#   ticket-issuance                   saga (Step Functions) -> ticket-issuance-service   30 s
+#   qr-generation                     ticket-issuance-service -> qr-generation Lambda   360 s
+#   queue-admissions                  waiting-room-service -> queue-notifier Lambda     180 s
+#   purchase-confirmed-notifications  purchase-confirmed topic -> notification-service  120 s
+# max_receive_count: 3 where a transient failure clears by itself; 5 behind a Lambda, where a
+# throttled invoke counts as a receive and must not push a message that succeeded to the DLQ.
+module "messaging" {
+  source = "../../modules/messaging"
+
+  name_prefix = local.name_prefix
+  kms_key_arn = module.kms.key_arn
+
+  queues = {
+    ticket-issuance = {
+      # one Postgres insert + one SQS send per message
+      consumer          = "pump"
+      batch_size        = 10
+      message_seconds   = 1
+      max_receive_count = 3
+    }
+    qr-generation = {
+      consumer          = "lambda"
+      function_timeout  = local.lambda_timeouts["qr-generation"]
+      max_receive_count = 5
+    }
+    queue-admissions = {
+      consumer          = "lambda"
+      function_timeout  = local.lambda_timeouts["queue-notifier"]
+      max_receive_count = 5
+    }
+    purchase-confirmed-notifications = {
+      # SES sandbox sends 1/s; 4 s per message leaves room for its throttling retries
+      consumer          = "pump"
+      batch_size        = 10
+      message_seconds   = 4
+      max_receive_count = 3
+    }
+  }
+
+  topics = {
+    purchase-confirmed = { queue_subscribers = ["purchase-confirmed-notifications"] }
+  }
 }

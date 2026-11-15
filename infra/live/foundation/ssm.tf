@@ -24,6 +24,9 @@ locals {
       "s3/qr_bucket_name"            = module.qr_bucket.name
     },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
+    { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },
+    { for k, arn in module.messaging.queue_arns : "messaging/queue/${k}/arn" => arn },
+    { for k, arn in module.messaging.topic_arns : "messaging/topic/${k}/arn" => arn },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
   )
 }
