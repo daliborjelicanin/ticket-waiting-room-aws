@@ -27,8 +27,13 @@ variable "alert_email" {
   default     = "jelicanindalibor@gmail.com"
 }
 
-variable "activate_cost_allocation_tags" {
-  description = "Set true once project/stack/env appear in Billing > Cost allocation tags (about 24 h after twr-dev's first tagged resources)."
-  type        = bool
-  default     = false
+variable "cost_allocation_tag_keys" {
+  description = "Tag keys activated for cost allocation (D17). Add stack and env once Billing lists them (2026-11-15: only project)."
+  type        = set(string)
+  default     = ["project"]
+
+  validation {
+    condition     = length(setsubtract(var.cost_allocation_tag_keys, ["project", "stack", "env"])) == 0
+    error_message = "Only the default_tags keys project, stack and env are cost-allocation tags."
+  }
 }
