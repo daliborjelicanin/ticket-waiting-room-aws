@@ -22,7 +22,13 @@ locals {
       "dynamodb/connections_name"    = module.connections_table.name
       "dynamodb/connections_arn"     = module.connections_table.arn
       "s3/qr_bucket_name"            = module.qr_bucket.name
+      "cognito/issuer_uri"           = module.identity.issuer_uri
+      "cognito/token_url"            = module.identity.token_url
+      "cognito/user_pool_id"         = module.identity.user_pool_id
+      "cognito/web_client_id"        = module.identity.web_client_id
     },
+    { for k, id in module.identity.m2m_client_ids : "cognito/${k}_client_id" => id },
+    { for k, arn in module.iam.role_arns : "iam/role/${k}" => arn },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
     { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },
@@ -38,8 +44,8 @@ locals {
   }
 
   published = merge(
-    { for k, v in local.published_strings : k => { type = "String", value = v } },
-    { for k, v in local.published_lists : k => { type = "StringList", value = join(",", v) } },
+    local.published_strings,
+    { for k, v in local.published_lists : k => join(",", v) },
   )
 }
 
@@ -47,6 +53,6 @@ resource "aws_ssm_parameter" "published" {
   for_each = local.published
 
   name  = "${local.ssm_prefix}/${each.key}"
-  type  = each.value.type
-  value = each.value.value
+  type  = contains(keys(local.published_lists), each.key) ? "StringList" : "String"
+  value = each.value
 }

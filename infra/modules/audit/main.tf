@@ -204,10 +204,12 @@ resource "aws_cloudwatch_event_target" "regional" {
 # --- us-east-1: global-service events, forwarded to this region's default bus ---------------
 
 locals {
-  us_east_1_rules = {
-    root-sign-in = local.regional_rules["root-sign-in"]
-    iam-change   = local.regional_rules["iam-change"]
-  }
+  # The two rules recorded in us-east-1, with the same description and pattern as their
+  # home-region twins. Flat string maps keyed by rule: an attribute of local.map[key] is
+  # unresolvable in IntelliJ's HCL plugin (infra/CLAUDE.md).
+  us_east_1_rules         = toset(["root-sign-in", "iam-change"])
+  rule_description        = { for k, r in local.regional_rules : k => r.description }
+  rule_event_pattern_json = { for k, r in local.regional_rules : k => jsonencode(r.pattern) }
 }
 
 data "aws_iam_policy_document" "forward_trust" {
@@ -252,8 +254,8 @@ resource "aws_cloudwatch_event_rule" "us_east_1" {
   provider = aws.us_east_1
 
   name          = "${var.name_prefix}-${each.key}"
-  description   = each.value.description
-  event_pattern = jsonencode(each.value.pattern)
+  description   = local.rule_description[each.key]
+  event_pattern = local.rule_event_pattern_json[each.key]
 }
 
 resource "aws_cloudwatch_event_target" "us_east_1" {
@@ -263,4 +265,14 @@ resource "aws_cloudwatch_event_target" "us_east_1" {
   rule     = aws_cloudwatch_event_rule.us_east_1[each.key].name
   arn      = "arn:${local.partition}:events:${data.aws_region.current.region}:${local.account_id}:event-bus/default"
   role_arn = aws_iam_role.forward.arn
+}
+
+# --- IAM Access Analyzer -----------------------------------------------------------------
+# The free external-access analyzer (D12): it reports any resource policy or trust policy that
+# grants access outside this account. A finding fails slice 1's verification. (The unused-
+# access analyzer is the paid one, and is not created.)
+
+resource "aws_accessanalyzer_analyzer" "account" {
+  analyzer_name = "${var.name_prefix}-external-access"
+  type          = "ACCOUNT"
 }

@@ -11,9 +11,13 @@ locals {
     )
   }
 
-  # queue => topic, for the queue policies that let a topic deliver.
-  subscriptions = merge([
-    for topic, t in var.topics : { for q in t.queue_subscribers : "${topic}/${q}" => { topic = topic, queue = q } }
+  # One entry per topic -> queue subscription, keyed "<topic>/<queue>", as two flat string
+  # maps (a map of objects from merge() is unresolvable in IntelliJ, infra/CLAUDE.md).
+  subscription_topic = merge([
+    for topic, t in var.topics : { for q in t.queue_subscribers : "${topic}/${q}" => topic }
+  ]...)
+  subscription_queue = merge([
+    for topic, t in var.topics : { for q in t.queue_subscribers : "${topic}/${q}" => q }
   ]...)
 }
 
@@ -64,11 +68,11 @@ resource "aws_sns_topic" "this" {
 # Per subscription, and only for queues: SNS's envelope turned every field null in Phase 1
 # while the service reported success (retro §3).
 resource "aws_sns_topic_subscription" "queue" {
-  for_each = local.subscriptions
+  for_each = local.subscription_topic
 
-  topic_arn            = aws_sns_topic.this[each.value.topic].arn
+  topic_arn            = aws_sns_topic.this[local.subscription_topic[each.key]].arn
   protocol             = "sqs"
-  endpoint             = aws_sqs_queue.main[each.value.queue].arn
+  endpoint             = aws_sqs_queue.main[local.subscription_queue[each.key]].arn
   raw_message_delivery = true
 }
 
@@ -100,7 +104,7 @@ data "aws_iam_policy_document" "queue" {
   }
 
   dynamic "statement" {
-    for_each = [for s in values(local.subscriptions) : s.topic if s.queue == each.key]
+    for_each = [for k, q in local.subscription_queue : local.subscription_topic[k] if q == each.key]
 
     content {
       sid       = "AllowTopicDelivery${statement.key}"

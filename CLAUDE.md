@@ -153,6 +153,8 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   config --exit-code 1 --ignorefile .trivyignore.yaml .` — the IaC scan `ci.yml` runs (exact
   image there); a finding is fixed in code, or suppressed in `.trivyignore.yaml` with the
   D-entry it implements
+- `infra/CLAUDE.md` holds the definition of done for a `.tf` change: all of the above, plus
+  zero IntelliJ problems across every `.tf` file and a `plan` read before reporting done
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
 Jib/`bootBuildImage` config; the `session` stack's resources and the deploy workflows
