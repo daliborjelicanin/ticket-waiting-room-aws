@@ -32,3 +32,16 @@ variable "github_oidc_sub_prefix" {
   type        = string
   default     = "repo:daliborjelicanin@67155304/ticket-waiting-room-aws@1411760078"
 }
+
+variable "pass_role_services" {
+  description = "Services a boundary-capped role may pass a twr-<env>-* role to (D12)."
+  type        = list(string)
+  default = [
+    "apigateway.amazonaws.com",
+    "ecs-tasks.amazonaws.com",
+    "events.amazonaws.com",
+    "lambda.amazonaws.com",
+    "scheduler.amazonaws.com",
+    "states.amazonaws.com",
+  ]
+}

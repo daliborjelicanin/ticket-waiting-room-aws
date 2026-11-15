@@ -1,5 +1,6 @@
-# Minimal CI for slice 0 (D14): the checks a ruleset on main can require. No AWS credentials
-# here and no OIDC; slice 4 adds images.yml and terraform.yml with their roles.
+# CI (D2, D14): the checks the ruleset on main requires — Gradle, and the Terraform gates (fmt,
+# validate, tflint, trivy). No AWS credentials here and no OIDC; slice 4 adds images.yml and
+# terraform.yml with their roles.
 name: ci
 
 on:
@@ -75,3 +76,11 @@ jobs:
         run: |
           tflint --init --config "$PWD/.tflint.hcl"
           tflint --recursive --config "$PWD/.tflint.hcl"
+      # IaC misconfiguration scan (D2). The image is pinned by digest, not tag: in March 2026
+      # trivy's release tags were repointed at malicious builds. Accepted findings live in
+      # .trivyignore.yaml, each with the decision it implements.
+      - name: trivy config
+        run: |
+          docker run --rm -v "$PWD":/src:ro -w /src \
+            aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            config --quiet --exit-code 1 --ignorefile .trivyignore.yaml .

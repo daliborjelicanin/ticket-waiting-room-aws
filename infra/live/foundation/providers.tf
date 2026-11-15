@@ -1,3 +1,14 @@
+locals {
+  # One set for both providers, so the us-east-1 alerts can never be tagged differently.
+  default_tags = {
+    project    = "ticket-waiting-room"
+    phase      = "2"
+    env        = var.env
+    stack      = "foundation"
+    managed-by = "terraform"
+  }
+}
+
 provider "aws" {
   region = var.region
 
@@ -5,13 +16,7 @@ provider "aws" {
   allowed_account_ids = [var.account_id]
 
   default_tags {
-    tags = {
-      project    = "ticket-waiting-room"
-      phase      = "2"
-      env        = var.env
-      stack      = "foundation"
-      managed-by = "terraform"
-    }
+    tags = local.default_tags
   }
 }
 
@@ -23,12 +28,6 @@ provider "aws" {
   allowed_account_ids = [var.account_id]
 
   default_tags {
-    tags = {
-      project    = "ticket-waiting-room"
-      phase      = "2"
-      env        = var.env
-      stack      = "foundation"
-      managed-by = "terraform"
-    }
+    tags = local.default_tags
   }
 }

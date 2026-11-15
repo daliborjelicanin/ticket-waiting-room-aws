@@ -328,7 +328,7 @@ record what that review changed and why, and stay as the reasoning.
   | gitleaks (existing, extended to `infra/`) | ✓ | ✓ |
   | `terraform fmt -check` | ✓ | ✓ |
   | `terraform validate`, `tflint` (AWS ruleset) | | ✓ |
-  | `trivy config` (IaC misconfiguration; tfsec's successor) | | ✓ |
+  | `trivy config` (IaC misconfiguration; tfsec's successor) — *in `ci.yml` since 2026-11-15, image pinned by digest; accepted findings in `infra/.trivyignore.yaml`, each citing its D-entry* | | ✓ |
   | `terraform test` (below), terraform-docs check | | ✓ |
   | `plan` posted to the PR | | ✓ |
 
@@ -1444,6 +1444,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 ### 1. Foundation — ≈ $2.5–3/month standing
 - [x] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push) — *applied 2026-11-14/15: `network` (94 resources), then `dynamodb`, `s3` (module for the QR bucket, SSE-KMS + bucket key), `ecr` (8 repos) — 37 resources; second plan clean, TTL/PITR/deletion protection/immutability checked on the account. KMS: the QR bucket needs no key-policy statement (IAM principals with `kms:ViaService`, granted in `iam`); the service-principal grants (SNS→SQS, EventBridge, Step Functions) land with `messaging`*
 - [x] `messaging`: queues, DLQs, `redrive_allow_policy`, derived visibility timeouts, `raw_message_delivery` — *applied 2026-11-15 (31 resources + the key policy): 4 queues + DLQs on the CMK, timeouts 30/360/180/120 s from the consumer formula, `purchase-confirmed` topic; the SNS→SQS key grant lives in `modules/kms`. A test publish arrived raw in the encrypted queue; second plan clean. No email subscription on the topic (Phase 1 had one): it would mail buyers' addresses to the owner*
+- [x] Review fixes (2026-11-15): permissions boundary allows `iam:PassRole` only on `twr-<env>-*` roles and only to the services that run project code (D12, was `*`; applied 2026-11-15, second plan clean); `trivy config` added to `ci.yml` (D2); SSM parameter types declared, not inferred; foundation `default_tags` shared by both providers
 - [ ] `identity` (Cognito, deletion protection, scanner client + `ticketing/gate` scope), `iam` (permissions separate from trust, every role, confused-deputy conditions, boundary attached), Access Analyzer
 - [ ] SES address identities; `qr-generation` verify base URL from the REST API's invoke URL (a reference, never typed)
 - [ ] `terraform test` for messaging, dynamodb, lambda-function, kms grants (D2)

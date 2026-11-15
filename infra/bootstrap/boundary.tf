@@ -14,9 +14,24 @@ data "aws_iam_policy_document" "boundary" {
       "kms:Decrypt", "kms:DescribeKey", "kms:Encrypt", "kms:GenerateDataKey*",
       "lambda:*", "logs:*", "rds-db:connect", "s3:*", "secretsmanager:*", "ses:*", "sns:*",
       "sqs:*", "ssm:GetParameter*", "ssmmessages:*", "states:*", "sts:AssumeRole", "xray:*",
-      "iam:PassRole",
     ]
     resources = ["*"]
+  }
+
+  # PassRole is the escalation path a boundary exists to close: a role allowed to pass *any*
+  # role to a service could hand it one stronger than itself. Only the project's own roles,
+  # and only to the services that run project code.
+  statement {
+    sid       = "PassOnlyProjectRolesToProjectServices"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:${data.aws_partition.current.partition}:iam::${local.account_id}:role/${local.prefix}-*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = var.pass_role_services
+    }
   }
 
   statement {

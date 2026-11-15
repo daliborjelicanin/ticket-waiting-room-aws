@@ -149,11 +149,16 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `terraform fmt -recursive infra` and, from `infra/`,
   `tflint --init && tflint --recursive --config "$PWD/.tflint.hcl"` — the gates `ci.yml` runs
   (pre-commit runs `terraform fmt -check` when `.tf` files are staged)
+- from `infra/`: `docker run --rm -v "$PWD":/src:ro -w /src aquasec/trivy:<version>@<digest>
+  config --exit-code 1 --ignorefile .trivyignore.yaml .` — the IaC scan `ci.yml` runs (exact
+  image there); a finding is fixed in code, or suppressed in `.trivyignore.yaml` with the
+  D-entry it implements
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-Jib/`bootBuildImage` config; Terraform resources and the deploy workflows (slice 0 has only
-the `infra/` skeleton and `.github/workflows/ci.yml`). Docker packaging is
-hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
+Jib/`bootBuildImage` config; the `session` stack's resources and the deploy workflows
+(`images.yml`, `terraform.yml`, `session.yml`, slice 4). `infra/` so far holds `org`,
+`bootstrap` and the `foundation` stack, applied from the owner's machine; `ci.yml` only
+checks. Docker packaging is hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
 `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
 ## Secrets and Identifiers — Never Committed

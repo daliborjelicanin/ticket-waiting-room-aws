@@ -1,0 +1,63 @@
+# trivy config suppressions. Each one is a decision recorded in docs/phase2-plan.md, scoped
+# to the files it covers, so a new instance elsewhere still fails CI. Add an entry only with
+# the decision it implements; a finding without one is fixed in the code instead.
+misconfigurations:
+  - id: AWS-0104
+    paths: ["modules/network/security_groups.tf"]
+    statement: >-
+      D3/D4: workload egress 443 to 0.0.0.0/0 is the route to AWS APIs through the session NAT.
+      Interface endpoints would narrow it at ~$7/month each, outside the budget.
+
+  - id: AWS-0015
+    paths: ["modules/audit/main.tf"]
+    statement: "D11: CloudTrail logs hold no customer data; SSE-S3 plus the bucket policy is the control."
+
+  - id: AWS-0132
+    paths:
+      - "bootstrap/state.tf"
+      - "org/state.tf"
+      - "modules/audit/main.tf"
+      - "modules/network/flow_logs.tf"
+    statement: >-
+      D11: the CMK is for customer data and credentials. State is guarded by its bucket policy
+      (only the Terraform roles), CloudTrail and flow logs hold no customer data.
+
+  - id: AWS-0025
+    paths: ["modules/dynamodb/main.tf"]
+    statement: >-
+      D11: no personal data beyond a pseudonymous sub, and a CMK would add a key-state
+      dependency to the hottest conditional-write path.
+
+  - id: AWS-0033
+    paths: ["modules/ecr/main.tf"]
+    statement: "D11: images hold code, not customer data."
+
+  - id: AWS-0089
+    statement: >-
+      D24: no S3 server access logging anywhere. CloudTrail records the management events;
+      per-request logs would be a second bucket of noise and cost for a dev account.
+
+  - id: AWS-0162
+    paths: ["modules/audit/main.tf"]
+    statement: "D24: the alerts run on EventBridge rules over CloudTrail events, not on a CloudWatch Logs copy."
+
+  - id: AWS-0090
+    paths:
+      - "modules/audit/main.tf"
+      - "modules/network/flow_logs.tf"
+      - "modules/s3/main.tf"
+    statement: >-
+      D24: only the state bucket is versioned. QR objects are re-rendered byte-for-byte from the
+      ticket id; CloudTrail (log file validation) and flow logs expire by lifecycle.
+
+  - id: AWS-0342
+    paths: ["bootstrap/boundary.tf"]
+    statement: >-
+      D12: the boundary's PassRole is limited to twr-<env>-* roles and to the services that run
+      project code (iam:PassedToService). The rule flags every PassRole allow, scoped or not.
+
+  - id: AWS-0345
+    paths: ["bootstrap/boundary.tf"]
+    statement: >-
+      D12: a permissions boundary is a ceiling, not a grant; every role's own policy scopes S3
+      to its buckets.
