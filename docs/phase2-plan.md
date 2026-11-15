@@ -198,7 +198,7 @@ infra/
   bootstrap/          local state → migrated: state bucket, OIDC provider + sub customisation, tf-plan / tf-apply-foundation / tf-apply-session roles, boundary
   modules/            own modules (one concern each; see D1)
     network/          wraps terraform-aws-modules/vpc + gateway endpoints + SGs
-    kms/  dynamodb/  messaging/  identity/  iam/  ecr/  lambda-function/
+    kms/  dynamodb/  s3/  messaging/  identity/  iam/  ecr/  lambda-function/
     websocket-api/  rest-api/  waf/  alb/  ecs-service/  rds/  cache/
     saga/  observability/  budgets/  audit/ (CloudTrail, GuardDuty, alerts)
       each: main.tf  variables.tf  outputs.tf  versions.tf  README.md (terraform-docs)
@@ -1442,7 +1442,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - **Learn:** state, locking, OIDC trust conditions (`sub` claim scoping)
 
 ### 1. Foundation — ≈ $2.5–3/month standing
-- [ ] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push) — *`network` applied 2026-11-14 (94 resources, $0; second plan clean); the rest open*
+- [ ] `network` (no NAT, flow logs → S3), `kms` producer grants for the stores below (key from slice 0, D11), `dynamodb` (TTL on, epoch seconds, PITR, deletion protection), `s3`, `ecr` (+ lifecycle, scan on push) — *`network` applied 2026-11-14 (94 resources, $0; second plan clean). `dynamodb`, `s3` (module for the QR bucket), `ecr` (8 repos) planned 2026-11-14: 37 to add. KMS: the QR bucket needs no key-policy statement (IAM principals with `kms:ViaService`, granted in `iam`); the service-principal grants (SNS→SQS, EventBridge, Step Functions) land with `messaging`*
 - [ ] `messaging`: queues, DLQs, `redrive_allow_policy`, derived visibility timeouts, `raw_message_delivery`
 - [ ] `identity` (Cognito, deletion protection, scanner client + `ticketing/gate` scope), `iam` (permissions separate from trust, every role, confused-deputy conditions, boundary attached), Access Analyzer
 - [ ] SES address identities; `qr-generation` verify base URL from the REST API's invoke URL (a reference, never typed)

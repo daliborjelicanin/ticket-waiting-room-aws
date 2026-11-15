@@ -51,3 +51,58 @@ module "network" {
 
   name_prefix = local.name_prefix
 }
+
+# --- stores (D11, D24) ----------------------------------------------------------------------
+# Attribute names mirror the Java contracts; a mismatch is not an error anywhere, it is a TTL
+# or a query that silently never matches.
+
+# common/.../SeatTableSchema: PK EVENT#<id>, SK SEAT#<id>, holdExpiresAt only while HELD.
+module "seat_table" {
+  source = "../../modules/dynamodb"
+
+  name                = "${local.name_prefix}-seat-inventory"
+  hash_key            = "pk"
+  range_key           = "sk"
+  ttl_attribute       = "holdExpiresAt"
+  deletion_protection = var.deletion_protection
+}
+
+# queue-socket-lambda/.../ConnectionTableSchema: written by the $connect integration (D18).
+module "connections_table" {
+  source = "../../modules/dynamodb"
+
+  name          = "${local.name_prefix}-connections"
+  hash_key      = "connectionId"
+  ttl_attribute = "expiresAt"
+  global_secondary_indexes = [
+    { name = "by-token", hash_key = "eventId", range_key = "token", projection_type = "KEYS_ONLY" },
+  ]
+  deletion_protection = var.deletion_protection
+}
+
+# A QR is a ticket, a bearer credential: CMK (D11). Not versioned: re-rendered byte-for-byte
+# from the ticket id (D24). Expiry because RDS, and so every ticket, is rebuilt per session.
+module "qr_bucket" {
+  source = "../../modules/s3"
+
+  name            = "${local.name_prefix}-qr"
+  kms_key_arn     = module.kms.key_arn
+  expiration_days = var.qr_expiration_days
+  force_destroy   = true
+}
+
+module "ecr" {
+  source = "../../modules/ecr"
+
+  name_prefix = local.name_prefix
+  repositories = [
+    "waiting-room-service",
+    "seat-inventory-service",
+    "checkout-payment-service",
+    "ticket-issuance-service",
+    "notification-service",
+    "hold-cleanup-lambda",
+    "qr-generation-lambda",
+    "queue-socket-lambda",
+  ]
+}

@@ -38,3 +38,15 @@ variable "phase2_end" {
   type        = string
   default     = "2027-04-30"
 }
+
+variable "deletion_protection" {
+  description = "AWS-side deletion protection on the standing stores (D24). End of phase: false, apply, destroy."
+  type        = bool
+  default     = true
+}
+
+variable "qr_expiration_days" {
+  description = "Days a rendered QR is kept (Phase 1: 7). Production would keep it as long as the ticket is valid."
+  type        = number
+  default     = 7
+}

@@ -17,7 +17,13 @@ locals {
       "network/app_route_table_ids"  = join(",", module.network.app_route_table_ids)
       "kms/key_arn"                  = module.kms.key_arn
       "observability/ops_alarms_arn" = module.observability.ops_alarms_topic_arn
+      "dynamodb/seat_table_name"     = module.seat_table.name
+      "dynamodb/seat_table_arn"      = module.seat_table.arn
+      "dynamodb/connections_name"    = module.connections_table.name
+      "dynamodb/connections_arn"     = module.connections_table.arn
+      "s3/qr_bucket_name"            = module.qr_bucket.name
     },
+    { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
   )
 }
