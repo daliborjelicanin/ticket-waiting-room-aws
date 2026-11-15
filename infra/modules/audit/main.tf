@@ -276,3 +276,63 @@ resource "aws_accessanalyzer_analyzer" "account" {
   analyzer_name = "${var.name_prefix}-external-access"
   type          = "ACCOUNT"
 }
+
+# Archive rules: the external access this account is MEANT to have, accepted by rule with its
+# reason, so an Active finding always means something new. Each rule matches one principal on
+# one set of roles; a different principal, or the same one on another resource, stays Active.
+# Each filter was proven against the live findings before it was written (2026-11-15).
+# The resource is matched with `contains`: an exact `eq` on a role ARN matched nothing.
+# A new rule archives only findings created after it. Findings that already exist need one
+# `aws accessanalyzer apply-archive-rule --analyzer-arn <arn> --rule-name <rule>` per rule,
+# which Terraform does not call (run 2026-11-15). On a cold rebuild the analyzer starts its
+# first scan the moment it exists, before the rules (which depend on it), so run that call
+# once after the apply as well.
+
+data "aws_organizations_organization" "this" {}
+
+locals {
+  # Each rule: the principal, matched exactly (principal_eq) or by its fixed part
+  # (principal_contains, exactly one of the two set), and a fragment of the resource ARN.
+  archive_rules = {
+    # D14: GitHub Actions assumes the four CI roles through OIDC, scoped by the sub claim.
+    github-actions-oidc = {
+      principal_key      = "principal.Federated"
+      principal_eq       = "arn:${local.partition}:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+      principal_contains = null
+      resource_contains  = ":role/${var.name_prefix}-"
+    }
+    # D12: the owner's IAM Identity Center sign-in (admin and read-only permission sets). The
+    # SAML provider's name carries a generated id (AWSSSO_<id>_DO_NOT_DELETE).
+    identity-center-sso = {
+      principal_key      = "principal.Federated"
+      principal_eq       = null
+      principal_contains = ":saml-provider/AWSSSO_"
+      resource_contains  = ":role/aws-reserved/sso.amazonaws.com/"
+    }
+    # D12: break-glass from the management account, Organizations' default member role.
+    management-break-glass = {
+      principal_key      = "principal.AWS"
+      principal_eq       = data.aws_organizations_organization.this.master_account_id
+      principal_contains = null
+      resource_contains  = ":role/OrganizationAccountAccessRole"
+    }
+  }
+}
+
+resource "aws_accessanalyzer_archive_rule" "intended" {
+  for_each = local.archive_rules
+
+  analyzer_name = aws_accessanalyzer_analyzer.account.analyzer_name
+  rule_name     = each.key
+
+  filter {
+    criteria = each.value.principal_key
+    eq       = each.value.principal_eq == null ? null : [each.value.principal_eq]
+    contains = each.value.principal_contains == null ? null : [each.value.principal_contains]
+  }
+
+  filter {
+    criteria = "resource"
+    contains = [each.value.resource_contains]
+  }
+}
