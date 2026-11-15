@@ -993,6 +993,10 @@ or ruleset**.* Both facts change this entry.
   - Native arm64 runners (`ubuntu-24.04-arm`) instead of QEMU, several times faster for a JVM
     build.
   - ECR **basic scan on push** (free), and a `buildx` SBOM attached to each image.
+    *Found 2026-11-15:* **not for the Lambda images.** An attestation (SBOM or provenance) turns
+    the push into an OCI image index, and Lambda accepts only a single image manifest. Lambda
+    images are built with `--provenance=false --sbom=false`; their SBOM, if wanted, is generated
+    separately (`docker buildx imagetools` / syft) and stored as a build artifact.
   - Lambda images go through the same `images.yml`. Because the Lambdas are in foundation, a new
     Lambda digest is deployed by the approved foundation apply (D23).
 - *Cost.* Public repositories get standard GitHub-hosted runners, arm64 included, at no charge.
@@ -1448,7 +1452,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - [x] `identity` (Cognito, deletion protection, scanner client + `ticketing/gate` scope), `iam` (permissions separate from trust, every role, confused-deputy conditions, boundary attached), Access Analyzer — *applied 2026-11-15 (70 resources; second plan clean; a client_credentials token for `ticketing/ops` minted): `modules/identity` (admin-created users only, 14-char passwords, `ops` + `gate` clients), `modules/iam` (19 roles: task + execution per ECS service incl. `migrate`, 3 Lambdas, 2 API Gateway, scheduler, saga), Access Analyzer in `modules/audit`; names of not-yet-built things decided once in foundation `locals`*. Access Analyzer's first scan: 7 findings, all intended trust (4 GitHub OIDC roles, 2 SSO roles, `OrganizationAccountAccessRole`), none on the 19 new roles; three archive rules in `modules/audit` (GitHub OIDC, Identity Center SSO, management break-glass), each filter proven against the live findings, applied 2026-11-15 (+ `apply-archive-rule` once for the existing findings): **0 Active, 7 Archived**
 - [ ] SES address identities; `qr-generation` verify base URL from the REST API's invoke URL (a reference, never typed) — *identities applied 2026-11-15 (`live/foundation/ses.tf`: one address, the owner's, as both sender and sandbox recipient), verified by click and a test send delivered; account in the sandbox, 200/day at 1/s; the QR base URL lands with `rest-api`*
 - [ ] `terraform test` for messaging, dynamodb, lambda-function, kms grants (D2)
-- [ ] `lambda-function` ×3 (arm64, log groups with retention, `ReportBatchItemFailures`, ESM `enabled = true`)
+- [ ] `lambda-function` ×3 (arm64, log groups with retention, `ReportBatchItemFailures`, ESM `enabled = true`) — *images built and pushed by hand 2026-11-15 (arm64 on an x86 host: the Dockerfiles only COPY, so no emulation), digests in `/twr/dev/images/<module>` as `images.yml` will write them (`tf-env.sh` resolves them into `TF_VAR_image_digests`); `modules/lambda-function` written and `hold-cleanup` applied 2026-11-15 (second plan clean; direct invoke on a seeded expired hold: `reclaimed=1`, seat back to AVAILABLE, logs in the declared 3-day group); `qr-generation` and `queue-notifier` wire with `rest-api` / `websocket-api`, whose URLs their required env needs; ECR basic scan: 13 HIGH, all Ubuntu 26.04 base packages (pcre2, glibc, perl, apt), none in the jars*
 - [ ] `websocket-api` (`integration_response_key = "/200/"`), `rest-api` resources + deployment `triggers`
 - [ ] `observability`: log groups, dashboard from `templatefile()`, saved Logs Insights queries, foundation alarms with `treat_missing_data` pinned, on the `ops-alarms` topic from slice 0 (D16)
 - [ ] Data protection: DynamoDB PITR + deletion protection, Cognito deletion protection, ECR immutable tags (D24)

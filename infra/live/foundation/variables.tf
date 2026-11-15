@@ -50,3 +50,13 @@ variable "qr_expiration_days" {
   type        = number
   default     = 7
 }
+
+variable "image_digests" {
+  description = "Deployed image digest per Gradle module (sha256:...), resolved from SSM /twr/<env>/images at dispatch by tf-env.sh or the workflow (D15). Never read from SSM by Terraform, so the plan shows what runs."
+  type        = map(string)
+
+  validation {
+    condition     = alltrue([for d in values(var.image_digests) : can(regex("^sha256:[0-9a-f]{64}$", d))])
+    error_message = "Each digest is sha256:<64 hex characters>."
+  }
+}

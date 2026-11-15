@@ -11,6 +11,7 @@ locals {
   # Lambda timeouts, in seconds: the lambda-function calls use them, and so do the visibility
   # timeouts of the queues feeding those functions (6x, retro §3). One number, two places.
   lambda_timeouts = {
+    hold-cleanup   = 30
     qr-generation  = 60
     queue-notifier = 30
   }
@@ -225,4 +226,23 @@ module "iam" {
   db                         = local.db
   saga_state_machine_name    = local.saga_state_machine_name
   ses_from_address           = local.ses_sender
+}
+
+# --- Lambdas (D7, D22, retro §3) -------------------------------------------------------------
+# Images by digest, from var.image_digests (tf-env.sh resolves them from SSM, D15).
+# qr-generation and queue-notifier need the REST API's invoke URL and the WebSocket endpoint
+# (required env, typed never): each is wired in the same change as the API it depends on.
+
+module "hold_cleanup" {
+  source = "../../modules/lambda-function"
+
+  function_name  = local.lambda_function_names["hold-cleanup"]
+  role_arn       = module.iam.role_arns["hold-cleanup-lambda"]
+  image_uri      = "${module.ecr.repository_urls["hold-cleanup-lambda"]}@${var.image_digests["hold-cleanup-lambda"]}"
+  timeout        = local.lambda_timeouts["hold-cleanup"]
+  log_group_name = local.log_groups.lambda["hold-cleanup"]
+
+  environment = {
+    SEAT_TABLE_NAME = module.seat_table.name # SeatTableSchema's table
+  }
 }

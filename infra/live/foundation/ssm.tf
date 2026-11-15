@@ -31,6 +31,7 @@ locals {
     },
     { for k, id in module.identity.m2m_client_ids : "cognito/${k}_client_id" => id },
     { for k, arn in module.iam.role_arns : "iam/role/${k}" => arn },
+    { "lambda/hold-cleanup/arn" = module.hold_cleanup.function_arn },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
     { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },

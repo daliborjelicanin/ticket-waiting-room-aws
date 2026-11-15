@@ -26,6 +26,9 @@ terraform -chdir=infra/live/foundation plan
 `tf-env.sh` exports `AWS_PROFILE` and `TF_VAR_account_id`. Every root pins
 `allowed_account_ids` to that id, so a shell left on the wrong profile fails at `plan`.
 The id is read from `~/.aws/config` and is never written to a file in this repository.
+For `twr-dev` it also exports `TF_VAR_image_digests`, the deployed image digests read from
+SSM `/twr/dev/images/*` (D15). Foundation requires it for the Lambdas, so re-source the
+script after an image is pushed.
 
 ## Conventions
 

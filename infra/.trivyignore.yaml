@@ -61,3 +61,10 @@ misconfigurations:
     statement: >-
       D12: a permissions boundary is a ceiling, not a grant; every role's own policy scopes S3
       to its buckets.
+
+  - id: AWS-0017
+    paths: ["modules/lambda-function/main.tf"]
+    statement: >-
+      D11: CloudWatch Logs use AWS-owned encryption. The control is the rule that no personal
+      data is logged (emails never are), not a key; a CMK per log group adds key-state
+      dependencies to every log write.
