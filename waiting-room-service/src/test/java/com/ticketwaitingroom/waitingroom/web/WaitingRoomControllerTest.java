@@ -135,6 +135,43 @@ class WaitingRoomControllerTest {
     }
 
     @Test
+    void admissionCheckReportsAnUnexpiredPassAsAdmitted() throws Exception {
+        when(waitingRoomService.admission("evt-1", CUSTOMER))
+                .thenReturn(new QueuePlace("evt-1", "tok-abc", QueueStatus.ADMITTED, null, 0,
+                        Instant.parse("2026-07-05T12:00:00Z")));
+
+        mockMvc.perform(get("/events/{eventId}/admissions/{customerRef}", "evt-1", CUSTOMER).with(ops()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.admitted").value(true))
+                .andExpect(jsonPath("$.status").value("ADMITTED"))
+                .andExpect(jsonPath("$.admissionExpiresAt").value("2026-07-05T12:00:00Z"));
+    }
+
+    @Test
+    void admissionCheckIs200AndNotAdmittedForEveryOtherStanding() throws Exception {
+        // The saga branches on the field: a 404 here would look like a routing fault.
+        for (QueueStatus standing : List.of(QueueStatus.WAITING, QueueStatus.EXPIRED, QueueStatus.NOT_QUEUED)) {
+            when(waitingRoomService.admission("evt-1", CUSTOMER))
+                    .thenReturn(new QueuePlace("evt-1", null, standing, null, 5,
+                            standing == QueueStatus.EXPIRED ? Instant.parse("2026-07-05T12:00:00Z") : null));
+
+            mockMvc.perform(get("/events/{eventId}/admissions/{customerRef}", "evt-1", CUSTOMER).with(ops()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.admitted").value(false))
+                    .andExpect(jsonPath("$.status").value(standing.name()))
+                    .andExpect(jsonPath("$.admissionExpiresAt").doesNotExist());
+        }
+    }
+
+    @Test
+    void aCustomerCannotProbeAnotherCustomersAdmission() throws Exception {
+        mockMvc.perform(get("/events/{eventId}/admissions/{customerRef}", "evt-1", "someone-else").with(customer()))
+                .andExpect(status().isForbidden());
+
+        verify(waitingRoomService, never()).admission(anyString(), anyString());
+    }
+
+    @Test
     void admitReturns400ForAnOutOfRangeCount() throws Exception {
         when(waitingRoomService.admitNext("evt-1", 0))
                 .thenThrow(new IllegalArgumentException("Admit count must be between 1 and 500, was 0"));

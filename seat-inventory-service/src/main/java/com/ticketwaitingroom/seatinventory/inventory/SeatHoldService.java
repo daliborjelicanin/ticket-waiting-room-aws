@@ -37,14 +37,15 @@ public class SeatHoldService {
     public SeatHold holdSeat(String eventId, String seatId) {
         String holdId = UUID.randomUUID().toString();
         Instant expiresAt = clock.instant().plus(properties.holdDuration());
+        long priceCents;
         try {
-            seatRepository.holdSeat(eventId, seatId, holdId, expiresAt);
+            priceCents = seatRepository.holdSeat(eventId, seatId, holdId, expiresAt);
         } catch (SeatUnavailableException lost) {
             metrics.holdAttempted(eventId, false);
             throw lost;
         }
         metrics.holdAttempted(eventId, true);
-        return new SeatHold(eventId, seatId, holdId, expiresAt);
+        return new SeatHold(eventId, seatId, holdId, expiresAt, priceCents);
     }
 
     /**

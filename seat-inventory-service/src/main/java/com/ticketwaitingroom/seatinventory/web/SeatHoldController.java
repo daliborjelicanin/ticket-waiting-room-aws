@@ -29,7 +29,7 @@ public class SeatHoldController {
     @ResponseStatus(HttpStatus.CREATED)
     public SeatHoldResponse hold(@PathVariable String eventId, @PathVariable String seatId) {
         SeatHold hold = seatHoldService.holdSeat(eventId, seatId);
-        return new SeatHoldResponse(hold.eventId(), hold.seatId(), hold.holdId(), hold.expiresAt());
+        return new SeatHoldResponse(hold.eventId(), hold.seatId(), hold.holdId(), hold.expiresAt(), hold.priceCents());
     }
 
     @DeleteMapping("/events/{eventId}/seats/{seatId}/hold/{holdId}")
@@ -50,7 +50,7 @@ public class SeatHoldController {
         return new PurchaseResponse(eventId, seatId, SeatStatus.SOLD);
     }
 
-    public record SeatHoldResponse(String eventId, String seatId, String holdId, Instant expiresAt) { }
+    public record SeatHoldResponse(String eventId, String seatId, String holdId, Instant expiresAt, long priceCents) { }
 
     public record PurchaseRequest(String holdId) { }
 

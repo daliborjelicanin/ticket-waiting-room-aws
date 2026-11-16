@@ -1,20 +1,51 @@
 {
-  "Comment": "Checkout saga: hold seat -> create order -> charge -> confirm -> enqueue issuance -> notify. Compensation is a seat release before money moves and a refund (then release) after. JSONata query language.",
+  "Comment": "Checkout saga: check admission -> hold seat (which prices it) -> create order -> charge -> confirm -> enqueue issuance -> notify. Compensation is a seat release before money moves and a refund (then release) after. JSONata query language.",
   "QueryLanguage": "JSONata",
-  "StartAt": "HoldSeat",
+  "StartAt": "CheckAdmission",
   "States": {
+
+    "CheckAdmission": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Arguments": {
+        "ApiEndpoint": "{% $states.input.waitingRoomBaseUrl & '/events/' & $states.input.eventId & '/admissions/' & $states.input.customerRef %}",
+        "Method": "GET",
+        "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" }
+      },
+      "Assign": {
+        "req": "{% $states.input %}",
+        "admission": "{% $states.result.ResponseBody %}"
+      },
+      "Retry": [{
+        "ErrorEquals": ["States.ALL"],
+        "IntervalSeconds": 1,
+        "MaxAttempts": 2,
+        "BackoffRate": 2.0
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "AdmissionNotVerified" }],
+      "Next": "IsAdmitted"
+    },
+
+    "IsAdmitted": {
+      "Type": "Choice",
+      "Choices": [{
+        "Condition": "{% $admission.admitted = true %}",
+        "Next": "HoldSeat"
+      }],
+      "Default": "NotAdmitted"
+    },
 
     "HoldSeat": {
       "Type": "Task",
       "Resource": "arn:aws:states:::http:invoke",
       "Arguments": {
-        "ApiEndpoint": "{% $states.input.inventoryBaseUrl & '/events/' & $states.input.eventId & '/seats/' & $states.input.seatId & '/hold' %}",
+        "ApiEndpoint": "{% $req.inventoryBaseUrl & '/events/' & $req.eventId & '/seats/' & $req.seatId & '/hold' %}",
         "Method": "POST",
         "Authentication": { "ConnectionArn": "__CONNECTION_ARN__" }
       },
       "Assign": {
-        "req": "{% $states.input %}",
-        "holdId": "{% $states.result.ResponseBody.holdId %}"
+        "holdId": "{% $states.result.ResponseBody.holdId %}",
+        "amountCents": "{% $states.result.ResponseBody.priceCents %}"
       },
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "SeatUnavailable" }],
       "Next": "CreateOrder"
@@ -32,7 +63,7 @@
           "orderId": "{% $req.orderId %}",
           "eventId": "{% $req.eventId %}",
           "customerRef": "{% $req.customerRef %}",
-          "amountCents": "{% $req.amountCents %}",
+          "amountCents": "{% $amountCents %}",
           "idempotencyKey": "{% $req.orderKey %}",
           "seats": "{% [ { 'seatId': $req.seatId, 'holdId': $holdId } ] %}"
         }
@@ -166,7 +197,7 @@
           "seatId": "{% $req.seatId %}",
           "customerRef": "{% $req.customerRef %}",
           "gatewayRef": "{% $payment.gatewayRef %}",
-          "amountCents": "{% $req.amountCents %}"
+          "amountCents": "{% $amountCents %}"
         }
       },
       "Retry": [{
@@ -185,7 +216,7 @@
       "Arguments": {
         "TopicArn": "__TOPIC_ARN__",
         "Subject": "Ticket purchase confirmed",
-        "Message": "{% $string({ 'orderId': $orderId, 'eventId': $req.eventId, 'seatId': $req.seatId, 'customerRef': $req.customerRef, 'email': $req.email, 'gatewayRef': $payment.gatewayRef, 'amountCents': $req.amountCents }) %}"
+        "Message": "{% $string({ 'orderId': $orderId, 'eventId': $req.eventId, 'seatId': $req.seatId, 'customerRef': $req.customerRef, 'email': $req.email, 'gatewayRef': $payment.gatewayRef, 'amountCents': $amountCents }) %}"
       },
       "Retry": [{
         "ErrorEquals": ["States.ALL"],
@@ -221,6 +252,18 @@
       }],
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "CompensationFailed" }],
       "Next": "PaymentFailed"
+    },
+
+    "NotAdmitted": {
+      "Type": "Fail",
+      "Error": "NotAdmitted",
+      "Cause": "The buyer holds no unexpired admission pass for this event; nothing was reserved."
+    },
+
+    "AdmissionNotVerified": {
+      "Type": "Fail",
+      "Error": "AdmissionNotVerified",
+      "Cause": "The waiting room could not be asked; the purchase fails closed and nothing was reserved."
     },
 
     "SeatUnavailable": {

@@ -20,6 +20,8 @@ package com.ticketwaitingroom.common.inventory;
  *                                         audit trail of the winning hold)
  *   holdExpiresAt = epoch-seconds TTL    (present only while HELD — removed on confirm
  *                                         so TTL can never delete a SOLD seat)
+ *   priceCents    = price, minor units   (set at seeding, never touched by a transition;
+ *                                         the saga charges what the hold returns)
  * </pre>
  */
 public final class SeatTableSchema {
@@ -37,6 +39,13 @@ public final class SeatTableSchema {
      * ignored by TTL forever.
      */
     public static final String ATTR_HOLD_EXPIRES_AT = "holdExpiresAt";
+
+    /**
+     * The seat's price in integer minor units, a Number. Written once at seeding; every
+     * transition names the attributes it changes, so the price survives hold, release,
+     * cleanup and sale untouched. A seat without one cannot be held.
+     */
+    public static final String ATTR_PRICE_CENTS = "priceCents";
 
     public static final String STATUS_AVAILABLE = "AVAILABLE";
     public static final String STATUS_HELD = "HELD";

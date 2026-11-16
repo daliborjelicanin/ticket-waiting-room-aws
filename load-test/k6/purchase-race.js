@@ -117,7 +117,7 @@ export function customer(data) {
   const seat = data.seats[(id - 1) % data.seats.length];
   const orderId = uuid();
   const purchase = http.post(`${API}/events/${EVENT}/purchase`, JSON.stringify({
-    orderId, seatId: seat, amountCents: 12000, paymentToken: 'tok_ok',
+    orderId, seatId: seat, paymentToken: 'tok_ok',
   }), { headers: purchaseHeaders(me), tags: { name: 'purchase' } });
   const acceptedAt = Date.now();
   if (!check(purchase, { 'purchase accepted (202)': (r) => r.status === 202 })) {

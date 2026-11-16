@@ -25,9 +25,10 @@ import java.util.List;
  * that is the point — a caller can only ever act on their own place, so polling somebody
  * else's position is not a request the API can express.
  *
- * <p>Admit is an <strong>ops-door</strong> endpoint. It pops real people off the head of a
- * real queue, so {@code SecurityConfig} requires the ops scope before this class is ever
- * reached; the controller itself has nothing to check.
+ * <p>Admit and the admission check are <strong>ops-door</strong> endpoints. Admit pops real
+ * people off the head of a real queue; the admission check names a customer in the URL,
+ * which a fan door must never do. {@code SecurityConfig} requires the ops scope for both
+ * before this class is ever reached; the controller itself has nothing to check.
  */
 @RestController
 @RequiredArgsConstructor
@@ -53,7 +54,22 @@ public class WaitingRoomController {
                 admission.admissionExpiresAt());
     }
 
+    /**
+     * The saga's first step: may this customer buy now? Always 200, with {@code admitted}
+     * true only for an unexpired pass, so the state machine branches on a field rather than
+     * on an HTTP error it would have to tell apart from an outage.
+     */
+    @GetMapping("/events/{eventId}/admissions/{customerRef}")
+    public AdmissionResponse admission(@PathVariable String eventId, @PathVariable String customerRef) {
+        QueuePlace place = waitingRoomService.admission(eventId, customerRef);
+        boolean admitted = place.status() == QueueStatus.ADMITTED;
+        return new AdmissionResponse(eventId, admitted, place.status(),
+                admitted ? place.admissionExpiresAt() : null);
+    }
+
     public record AdmitRequest(int count) { }
+
+    public record AdmissionResponse(String eventId, boolean admitted, QueueStatus status, Instant admissionExpiresAt) { }
 
     public record AdmitResponse(String eventId, List<String> tokens, int admitted, Instant admissionExpiresAt) { }
 

@@ -1480,6 +1480,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - [ ] RDS (private, CMK), Valkey (TLS), `migrate` profile + migration task creating databases and per-service roles (D9, D10, D13)
 - [ ] EventBridge connection + state machine from `templatefile()`
 - [ ] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role
+- [ ] README *Known gaps* closed in code (2026-11-16): saga `CheckAdmission` → `NotAdmitted` before `HoldSeat`; price owned by the seat and returned by the hold (`ALL_NEW`), `amountCents` dropped from the purchase template. Foundation applied 2026-11-16 (2 in place: the purchase integration and the published `definition_hash`; second plan clean). Left: verify on AWS a purchase without a pass fails `NotAdmitted` and the charge equals the seeded price
 - [ ] Verify: purchase happy path; **the refund path on AWS for the first time** (`runbook-checkout-saga.md`, *The Refund Path*)
 - **Learn:** migrations as a deploy step, ECS Exec as the bastion
 

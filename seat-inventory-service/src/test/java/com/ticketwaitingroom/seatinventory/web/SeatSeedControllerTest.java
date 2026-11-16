@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,12 +46,12 @@ class SeatSeedControllerTest {
 
     @Test
     void returns201WithCreatedAndSkippedCounts() throws Exception {
-        when(seatSeedService.seedSeats("evt-1", List.of("A-1", "A-2", "A-3")))
+        when(seatSeedService.seedSeats("evt-1", List.of("A-1", "A-2", "A-3"), 12000))
                 .thenReturn(new SeedResult(2, 1));
 
         mockMvc.perform(post("/admin/events/{eventId}/seats", "evt-1").with(operator())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"seatIds\":[\"A-1\",\"A-2\",\"A-3\"]}"))
+                        .content("{\"seatIds\":[\"A-1\",\"A-2\",\"A-3\"],\"priceCents\":12000}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.eventId").value("evt-1"))
                 .andExpect(jsonPath("$.created").value(2))
@@ -58,12 +59,36 @@ class SeatSeedControllerTest {
     }
 
     @Test
+    void aSeedWithoutAPositivePriceIs400() throws Exception {
+        // The service refuses a zero price rather than seat a free ticket the saga would charge as such.
+        when(seatSeedService.seedSeats("evt-1", List.of("A-1"), 0))
+                .thenThrow(new IllegalArgumentException("Seat price must be positive, was 0"));
+
+        mockMvc.perform(post("/admin/events/{eventId}/seats", "evt-1").with(operator())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"seatIds\":[\"A-1\"],\"priceCents\":0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Invalid request"));
+    }
+
+    @Test
+    void aSeedWithNoPriceAtAllIs400AndNeverReachesTheService() throws Exception {
+        // Jackson 3 refuses a missing primitive outright, so an old-shaped seed cannot slip through as 0.
+        mockMvc.perform(post("/admin/events/{eventId}/seats", "evt-1").with(operator())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"seatIds\":[\"A-1\"]}"))
+                .andExpect(status().isBadRequest());
+
+        verify(seatSeedService, never()).seedSeats(any(), any(), anyLong());
+    }
+
+    @Test
     void aCustomerCannotSeedSeats() throws Exception {
         mockMvc.perform(post("/admin/events/{eventId}/seats", "evt-1").with(customer())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"seatIds\":[\"A-1\"]}"))
+                        .content("{\"seatIds\":[\"A-1\"],\"priceCents\":12000}"))
                 .andExpect(status().isForbidden());
 
-        verify(seatSeedService, never()).seedSeats(any(), any());
+        verify(seatSeedService, never()).seedSeats(any(), any(), anyLong());
     }
 }

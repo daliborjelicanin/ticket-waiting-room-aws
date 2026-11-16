@@ -16,11 +16,13 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.DeleteTableRequest;
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
 import software.amazon.awssdk.services.dynamodb.model.KeyType;
+import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException;
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 import software.amazon.awssdk.services.dynamodb.model.TimeToLiveSpecification;
@@ -28,6 +30,7 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateTimeToLiveRequest;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -53,6 +56,7 @@ class SeatHoldConcurrencyIT {
     private static final String TABLE = "seat-inventory";
     private static final String EVENT_ID = "evt-1";
     private static final String SEAT_ID = "A-12";
+    private static final long PRICE_CENTS = 12000;
 
     @Container
     static final LocalStackContainer LOCALSTACK = new LocalStackContainer(
@@ -82,7 +86,7 @@ class SeatHoldConcurrencyIT {
     void freshTableWithOneAvailableSeat() {
         recreateTable();
         repository = new SeatRepository(dynamo, TABLE);
-        repository.createAvailableSeat(EVENT_ID, SEAT_ID);
+        repository.createAvailableSeat(EVENT_ID, SEAT_ID, PRICE_CENTS);
     }
 
     @Test
@@ -243,10 +247,49 @@ class SeatHoldConcurrencyIT {
     }
 
     @Test
+    void theHoldReturnsTheSeatsPriceAndEveryTransitionKeepsIt() {
+        Instant expiresAt = Instant.now().plus(Duration.ofMinutes(5));
+
+        assertThat(repository.holdSeat(EVENT_ID, SEAT_ID, "hold-1", expiresAt)).isEqualTo(PRICE_CENTS);
+        repository.releaseHold(EVENT_ID, SEAT_ID, "hold-1");
+        assertThat(repository.holdSeat(EVENT_ID, SEAT_ID, "hold-2", expiresAt)).isEqualTo(PRICE_CENTS);
+        repository.confirmPurchase(EVENT_ID, SEAT_ID, "hold-2", Instant.now());
+
+        assertThat(repository.getSeat(EVENT_ID, SEAT_ID).priceCents()).isEqualTo(PRICE_CENTS);
+    }
+
+    @Test
+    void aReseedNeverReprices() {
+        assertThat(repository.createAvailableSeat(EVENT_ID, SEAT_ID, 1)).isFalse();
+
+        assertThat(repository.getSeat(EVENT_ID, SEAT_ID).priceCents()).isEqualTo(PRICE_CENTS);
+    }
+
+    @Test
+    void aSeatWithNoPriceCannotBeHeld() {
+        // Seeded before seats carried a price: not for sale, rather than for sale at
+        // whatever amount a caller names.
+        dynamo.putItem(PutItemRequest.builder()
+                .tableName(TABLE)
+                .item(Map.of(
+                        SeatTableSchema.ATTR_PK, AttributeValue.fromS(SeatTableSchema.pk(EVENT_ID)),
+                        SeatTableSchema.ATTR_SK, AttributeValue.fromS(SeatTableSchema.sk("UNPRICED")),
+                        SeatTableSchema.ATTR_EVENT_ID, AttributeValue.fromS(EVENT_ID),
+                        SeatTableSchema.ATTR_SEAT_ID, AttributeValue.fromS("UNPRICED"),
+                        SeatTableSchema.ATTR_STATUS, AttributeValue.fromS(SeatTableSchema.STATUS_AVAILABLE)))
+                .build());
+
+        assertThatThrownBy(() -> repository.holdSeat(EVENT_ID, "UNPRICED", "hold-1",
+                Instant.now().plus(Duration.ofMinutes(5))))
+                .isInstanceOf(SeatUnavailableException.class);
+        assertThat(repository.getSeat(EVENT_ID, "UNPRICED").status()).isEqualTo(SeatStatus.AVAILABLE);
+    }
+
+    @Test
     void remainingCountFollowsTheSeatLifecycle() {
-        repository.createAvailableSeat(EVENT_ID, "A-13");
-        repository.createAvailableSeat(EVENT_ID, "A-14");
-        repository.createAvailableSeat("evt-other", "Z-1");
+        repository.createAvailableSeat(EVENT_ID, "A-13", PRICE_CENTS);
+        repository.createAvailableSeat(EVENT_ID, "A-14", PRICE_CENTS);
+        repository.createAvailableSeat("evt-other", "Z-1", PRICE_CENTS);
         Instant expiresAt = Instant.now().plus(Duration.ofMinutes(5));
 
         assertThat(repository.countAvailable(EVENT_ID)).isEqualTo(3);

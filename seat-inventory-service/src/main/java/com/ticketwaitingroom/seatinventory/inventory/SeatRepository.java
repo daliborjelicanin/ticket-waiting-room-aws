@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
+import software.amazon.awssdk.services.dynamodb.model.ReturnValue;
 import software.amazon.awssdk.services.dynamodb.model.ReturnValuesOnConditionCheckFailure;
 import software.amazon.awssdk.services.dynamodb.model.Select;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
@@ -21,6 +22,7 @@ import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_EVENT_
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_HOLD_EXPIRES_AT;
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_HOLD_ID;
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_PK;
+import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_PRICE_CENTS;
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_SEAT_ID;
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_SK;
 import static com.ticketwaitingroom.common.inventory.SeatTableSchema.ATTR_STATUS;
@@ -46,6 +48,8 @@ import static com.ticketwaitingroom.common.inventory.SeatTableSchema.sk;
  *                                         audit trail of the winning hold)
  *   holdExpiresAt = epoch-seconds TTL    (present only while HELD — removed on confirm
  *                                         so TTL can never delete a SOLD seat)
+ *   priceCents    = price, minor units   (set at seeding, never touched by a transition;
+ *                                         the saga charges what the hold returns)
  * </pre>
  */
 @RequiredArgsConstructor
@@ -60,9 +64,12 @@ public class SeatRepository {
      * seat — an already-existing seat is reported as {@code false}, not an error, which
      * makes seeding safely re-runnable.
      *
+     * <p>The price is part of the seat from the moment it exists. A re-seed of an existing
+     * seat is skipped like any other, so it can never reprice a seat under a live hold.
+     *
      * @return {@code true} if the seat was created, {@code false} if it already existed
      */
-    public boolean createAvailableSeat(String eventId, String seatId) {
+    public boolean createAvailableSeat(String eventId, String seatId, long priceCents) {
         try {
             dynamo.putItem(PutItemRequest.builder()
                     .tableName(tableName)
@@ -71,7 +78,8 @@ public class SeatRepository {
                             ATTR_SK, s(sk(seatId)),
                             ATTR_EVENT_ID, s(eventId),
                             ATTR_SEAT_ID, s(seatId),
-                            ATTR_STATUS, s(SeatStatus.AVAILABLE.name())))
+                            ATTR_STATUS, s(SeatStatus.AVAILABLE.name()),
+                            ATTR_PRICE_CENTS, n(priceCents)))
                     .conditionExpression("attribute_not_exists(" + ATTR_PK + ")")
                     .build());
             return true;
@@ -86,28 +94,39 @@ public class SeatRepository {
      * write only applies if the seat is currently AVAILABLE, so concurrent callers for
      * the same seat cannot both succeed.
      *
+     * <p>The seat's price comes back from the same write ({@code ALL_NEW}), so what the saga
+     * charges is what the item held at the instant the hold was won, with no second read
+     * that a reprice could slip between. A seat with no price fails the condition: it is
+     * not for sale, rather than for sale at whatever amount a caller supplies.
+     *
+     * @return the seat's price in minor units
      * @throws SeatUnavailableException if the seat is not AVAILABLE (already held, sold,
-     *                                  or nonexistent) — i.e. this caller lost the race.
+     *                                  or nonexistent) or has no price — i.e. this caller
+     *                                  lost the race, or there was nothing to win.
      */
-    public void holdSeat(String eventId, String seatId, String holdId, Instant holdExpiresAt) {
+    public long holdSeat(String eventId, String seatId, String holdId, Instant holdExpiresAt) {
         try {
-            dynamo.updateItem(UpdateItemRequest.builder()
+            Map<String, AttributeValue> held = dynamo.updateItem(UpdateItemRequest.builder()
                     .tableName(tableName)
                     .key(Map.of(
                             ATTR_PK, s(pk(eventId)),
                             ATTR_SK, s(sk(seatId))))
                     .updateExpression("SET #status = :held, #holdId = :holdId, #ttl = :ttl")
-                    .conditionExpression("#status = :available")
+                    .conditionExpression("#status = :available AND attribute_exists(#price)")
                     .expressionAttributeNames(Map.of(
                             "#status", ATTR_STATUS,
                             "#holdId", ATTR_HOLD_ID,
-                            "#ttl", ATTR_HOLD_EXPIRES_AT))
+                            "#ttl", ATTR_HOLD_EXPIRES_AT,
+                            "#price", ATTR_PRICE_CENTS))
                     .expressionAttributeValues(Map.of(
                             ":held", s(SeatStatus.HELD.name()),
                             ":available", s(SeatStatus.AVAILABLE.name()),
                             ":holdId", s(holdId),
                             ":ttl", n(holdExpiresAt.getEpochSecond())))
-                    .build());
+                    .returnValues(ReturnValue.ALL_NEW)
+                    .build())
+                    .attributes();
+            return Long.parseLong(held.get(ATTR_PRICE_CENTS).n());
         } catch (ConditionalCheckFailedException e) {
             throw new SeatUnavailableException(
                     "Seat " + seatId + " of event " + eventId + " is not available to hold");
@@ -225,12 +244,14 @@ public class SeatRepository {
             return null;
         }
         AttributeValue ttl = item.get(ATTR_HOLD_EXPIRES_AT);
+        AttributeValue price = item.get(ATTR_PRICE_CENTS);
         return new Seat(
                 item.get(ATTR_EVENT_ID).s(),
                 item.get(ATTR_SEAT_ID).s(),
                 SeatStatus.valueOf(item.get(ATTR_STATUS).s()),
                 item.containsKey(ATTR_HOLD_ID) ? item.get(ATTR_HOLD_ID).s() : null,
-                ttl != null ? Instant.ofEpochSecond(Long.parseLong(ttl.n())) : null);
+                ttl != null ? Instant.ofEpochSecond(Long.parseLong(ttl.n())) : null,
+                price != null ? Long.parseLong(price.n()) : null);
     }
 
     /**

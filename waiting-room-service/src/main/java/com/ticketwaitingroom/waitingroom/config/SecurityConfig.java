@@ -14,7 +14,8 @@ import org.springframework.http.HttpMethod;
  * <p>Join and position are fan-door endpoints: any customer, acting as their own
  * {@code sub}. Admit pops real people off the head of a real queue, so it is ops-only — a
  * customer's token, valid and from the same pool, is refused with 403 before the controller
- * runs.
+ * runs. The admission check is ops-only too: it takes the customer from the URL, so on a
+ * fan door it would let anyone probe anyone else's standing.
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
@@ -23,6 +24,8 @@ public class SecurityConfig {
     EndpointAuthorization opsEndpoints() {
         return registry -> registry
                 .requestMatchers(HttpMethod.POST, "/events/{eventId}/queue/admit")
+                .hasAuthority(TicketingAuthorities.OPS)
+                .requestMatchers(HttpMethod.GET, "/events/{eventId}/admissions/{customerRef}")
                 .hasAuthority(TicketingAuthorities.OPS);
     }
 }

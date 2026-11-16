@@ -1,6 +1,8 @@
 ## POST /events/{eventId}/purchase -> states:StartExecution (runbook-cognito-auth.md §10).
 ## What the client may choose comes from the body; what it may NOT (customerRef, email) from the
 ## verified claims of the Cognito authorizer. The body's customerRef, if any, is never read.
+## Nor does the client name the price: the saga charges what the seat hold returns, and checks
+## the buyer's admission pass before holding anything. A body amountCents is ignored.
 ## name = orderId: Standard workflows refuse a duplicate name for 90 days, so a retried POST is
 ## ExecutionAlreadyExists at the edge, which is the purchase's idempotency.
 ## The saga calls the services back through this API's own stage (D5): services_base_url.
@@ -8,5 +10,5 @@
 {
   "stateMachineArn": "${saga_state_machine_arn}",
   "name": "$util.escapeJavaScript($b.orderId)",
-  "input": "{\"orderId\":\"$util.escapeJavaScript($b.orderId)\",\"eventId\":\"$util.escapeJavaScript($input.params('eventId'))\",\"seatId\":\"$util.escapeJavaScript($b.seatId)\",\"amountCents\":$b.amountCents,\"paymentToken\":\"$util.escapeJavaScript($b.paymentToken)\",\"customerRef\":\"$context.authorizer.claims.sub\",\"email\":\"$context.authorizer.claims.email\",\"orderKey\":\"$util.escapeJavaScript($b.orderId)\",\"paymentKey\":\"$util.escapeJavaScript($b.orderId)-pay\",\"inventoryBaseUrl\":\"${services_base_url}\",\"checkoutBaseUrl\":\"${services_base_url}\"}"
+  "input": "{\"orderId\":\"$util.escapeJavaScript($b.orderId)\",\"eventId\":\"$util.escapeJavaScript($input.params('eventId'))\",\"seatId\":\"$util.escapeJavaScript($b.seatId)\",\"paymentToken\":\"$util.escapeJavaScript($b.paymentToken)\",\"customerRef\":\"$context.authorizer.claims.sub\",\"email\":\"$context.authorizer.claims.email\",\"orderKey\":\"$util.escapeJavaScript($b.orderId)\",\"paymentKey\":\"$util.escapeJavaScript($b.orderId)-pay\",\"waitingRoomBaseUrl\":\"${services_base_url}\",\"inventoryBaseUrl\":\"${services_base_url}\",\"checkoutBaseUrl\":\"${services_base_url}\"}"
 }

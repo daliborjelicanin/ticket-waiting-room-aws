@@ -34,9 +34,12 @@ export function seatIds(count, prefix) {
   return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`);
 }
 
-/** Seed an event's seats as the operator; re-runnable, existing seats are skipped. */
-export function seed(eventId, seats) {
-  const res = http.post(`${API}/admin/events/${eventId}/seats`, JSON.stringify({ seatIds: seats }), {
+/**
+ * Seed an event's seats as the operator; re-runnable, existing seats are skipped (and keep
+ * their price). The price is the seat's: the saga charges what the hold returns.
+ */
+export function seed(eventId, seats, priceCents = 12000) {
+  const res = http.post(`${API}/admin/events/${eventId}/seats`, JSON.stringify({ seatIds: seats, priceCents }), {
     headers: opsHeaders(), tags: { name: 'seed' },
   });
   if (res.status !== 201) {

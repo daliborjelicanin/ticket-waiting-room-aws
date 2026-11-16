@@ -173,12 +173,15 @@ sequenceDiagram
     E->>SFN: StartExecution
     E-->>C: 202 {orderId}
     Note over SFN: every http:invoke below carries a<br/>Bearer M2M token, scope ticketing/ops
+    SFN->>WR: GET /events/{e}/admissions/{customerRef}
+    WR->>R: position.lua — pass for this sub, unexpired?
+    WR-->>SFN: admitted true · otherwise the execution fails NotAdmitted
     SFN->>SI: POST .../hold
-    SI->>D: UpdateItem if status = AVAILABLE
-    D-->>SI: ok
-    SI-->>SFN: holdId, expiresAt
+    SI->>D: UpdateItem if AVAILABLE and priced · ReturnValues ALL_NEW
+    D-->>SI: item, with priceCents
+    SI-->>SFN: holdId, expiresAt, priceCents
 
-    SFN->>CP: POST /orders  (orderId, customerRef, idempotencyKey)
+    SFN->>CP: POST /orders  (orderId, customerRef, amountCents = the hold's price, idempotencyKey)
     CP->>PG: insert order PENDING — id is the client's orderId
     CP-->>SFN: orderId
 
@@ -210,15 +213,20 @@ sequenceDiagram
 ## 3. The checkout saga
 
 Straight from `checkout-saga.asl.json`. The shape worth reading is the **right-hand
-side**: there are seven distinct failure states, because what compensation means changes
-the instant money moves. Before the capture it is a hold release; after it, a refund
-followed by a release.
+side**: there are nine distinct failure states, because what compensation means changes
+the instant money moves. Before anything is held there is nothing to undo (the admission
+check); before the capture it is a hold release; after it, a refund followed by a release.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> HoldSeat
+    [*] --> CheckAdmission
 
-    HoldSeat --> CreateOrder: held
+    CheckAdmission --> IsAdmitted: retry x2, then choice
+    CheckAdmission --> AdmissionNotVerified: catch (fails closed)
+    IsAdmitted --> HoldSeat: admitted = true
+    IsAdmitted --> NotAdmitted: no unexpired pass
+
+    HoldSeat --> CreateOrder: held, priced
     HoldSeat --> SeatUnavailable: catch
 
     CreateOrder --> ChargePayment: order created
@@ -249,6 +257,8 @@ stateDiagram-v2
     ReleaseSeat --> PaymentFailed: hold released
     ReleaseSeat --> CompensationFailed: catch
 
+    NotAdmitted --> [*]
+    AdmissionNotVerified --> [*]
     SeatUnavailable --> [*]
     PaymentFailed --> [*]
     CompensationFailed --> [*]

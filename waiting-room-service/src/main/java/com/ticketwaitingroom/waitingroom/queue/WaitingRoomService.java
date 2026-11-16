@@ -64,6 +64,18 @@ public class WaitingRoomService {
     }
 
     /**
+     * Whether a customer holds an admission pass for the event that is still valid now.
+     * The saga asks this before it holds a seat, so a purchase is refused for anyone the
+     * waiting room has not let through, whatever token they present at the edge.
+     *
+     * <p>Unlike {@link #place}, an unknown customer is an ordinary answer here rather than
+     * a 404: the caller is the saga, and "not admitted" is the result it branches on.
+     */
+    public QueuePlace admission(String eventId, String customerRef) {
+        return queue.place(eventId, customerRef, clock.instant());
+    }
+
+    /**
      * Let the next {@code count} tokens through. In the finished system this is driven by
      * how much capacity checkout has free; for now the caller names the number.
      *

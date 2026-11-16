@@ -26,11 +26,11 @@ public class SeatSeedController {
     @PostMapping("/admin/events/{eventId}/seats")
     @ResponseStatus(HttpStatus.CREATED)
     public SeedResponse seed(@PathVariable String eventId, @RequestBody SeedRequest request) {
-        SeedResult result = seatSeedService.seedSeats(eventId, request.seatIds());
+        SeedResult result = seatSeedService.seedSeats(eventId, request.seatIds(), request.priceCents());
         return new SeedResponse(eventId, result.created(), result.skipped());
     }
 
-    public record SeedRequest(List<String> seatIds) { }
+    public record SeedRequest(List<String> seatIds, long priceCents) { }
 
     public record SeedResponse(String eventId, int created, int skipped) { }
 }

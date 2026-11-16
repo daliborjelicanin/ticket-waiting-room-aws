@@ -58,13 +58,14 @@ class SeatHoldControllerTest {
     @Test
     void returns201WithHoldOnSuccess() throws Exception {
         when(seatHoldService.holdSeat(eq("evt-1"), eq("A-12")))
-                .thenReturn(new SeatHold("evt-1", "A-12", "hold-abc", Instant.parse("2026-07-05T12:00:00Z")));
+                .thenReturn(new SeatHold("evt-1", "A-12", "hold-abc", Instant.parse("2026-07-05T12:00:00Z"), 12000));
 
         mockMvc.perform(post("/events/{eventId}/seats/{seatId}/hold", "evt-1", "A-12").with(saga()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.eventId").value("evt-1"))
                 .andExpect(jsonPath("$.seatId").value("A-12"))
-                .andExpect(jsonPath("$.holdId").value("hold-abc"));
+                .andExpect(jsonPath("$.holdId").value("hold-abc"))
+                .andExpect(jsonPath("$.priceCents").value(12000));
     }
 
     @Test
