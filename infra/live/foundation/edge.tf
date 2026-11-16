@@ -28,7 +28,19 @@ module "rest_api" {
 # Account-wide, per region: the role every REST and WebSocket stage writes access logs with.
 resource "aws_api_gateway_account" "this" {
   cloudwatch_role_arn = module.iam.role_arns["apigateway-cloudwatch"]
+
+  depends_on = [aws_cloudwatch_log_group.apigateway_welcome]
 }
+
+# Setting the account's role makes API Gateway write a "welcome" event into this group, which
+# it creates with no retention if the group is missing (found by the sweep, 2026-11-16).
+# Declared first, so it exists with a retention before the setting is made. (The group created
+# on 2026-11-16 was adopted with a one-time import block, removed after it applied.)
+resource "aws_cloudwatch_log_group" "apigateway_welcome" {
+  name              = "/aws/apigateway/welcome"
+  retention_in_days = 3
+}
+
 
 data "aws_partition" "current" {}
 

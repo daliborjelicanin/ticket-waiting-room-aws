@@ -63,7 +63,7 @@ misconfigurations:
       to its buckets.
 
   - id: AWS-0017
-    paths: ["modules/lambda-function/main.tf", "modules/websocket-api/main.tf", "modules/rest-api/main.tf", "modules/observability/main.tf"]
+    paths: ["modules/lambda-function/main.tf", "modules/websocket-api/main.tf", "modules/rest-api/main.tf", "modules/observability/main.tf", "live/foundation/edge.tf"]
     statement: >-
       D11: CloudWatch Logs use AWS-owned encryption. The control is the rule that no personal
       data is logged (emails never are), not a key; a CMK per log group adds key-state

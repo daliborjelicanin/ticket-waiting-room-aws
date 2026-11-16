@@ -17,7 +17,8 @@ export AWS_PAGER=""
 REGION="${AWS_REGION:-eu-central-1}"
 TAG_KEY=project
 TAG_VALUE=ticket-waiting-room
-NAME_PATTERN='ticket|seat|checkout|issuance|notification|waiting-room|qr-generation|hold-cleanup|queue-|purchase-confirmed'
+# Phase 2 names all start twr-<env>- (D25); the rest are Phase 1's, kept for its leftovers.
+NAME_PATTERN='twr-|ticket|seat|checkout|issuance|notification|waiting-room|qr-generation|hold-cleanup|queue-|purchase-confirmed'
 
 hits=0
 a() { aws --region "$REGION" "$@" 2>/dev/null; }
@@ -69,11 +70,6 @@ billing "REST API stage caches" sh -c '
   done'
 billing "EventBridge connections (each a \$0.40/mo secret)" a events list-connections --query 'Connections[].[Name,ConnectionState]' --output text
 billing "Secrets Manager secrets (\$0.40/mo each)" a secretsmanager list-secrets --query 'SecretList[].Name' --output text
-billing "Customer-managed KMS keys (\$1/mo each)" sh -c '
-  for k in $(aws --region '"$REGION"' kms list-keys --query "Keys[].KeyId" --output text); do
-    aws --region '"$REGION"' kms describe-key --key-id "$k" \
-      --query "KeyMetadata[?KeyManager==\`CUSTOMER\` && KeyState!=\`PendingDeletion\`].KeyId" --output text
-  done'
 billing "Lambda provisioned concurrency" sh -c '
   for f in $(aws --region '"$REGION"' lambda list-functions --query "Functions[].FunctionName" --output text); do
     aws --region '"$REGION"' lambda list-provisioned-concurrency-configs --function-name "$f" \
@@ -87,7 +83,7 @@ billing "Running Step Functions executions" sh -c '
 billing "DynamoDB tables not on-demand" sh -c '
   for t in $(aws --region '"$REGION"' dynamodb list-tables --query TableNames --output text); do
     aws --region '"$REGION"' dynamodb describe-table --table-name "$t" \
-      --query "Table[?BillingModeSummary.BillingMode!=\`PAY_PER_REQUEST\`].TableName" --output text
+      --query "[Table][?BillingModeSummary.BillingMode!=\`PAY_PER_REQUEST\`].TableName" --output text
   done'
 billing "CloudFront distributions" aws cloudfront list-distributions --query 'DistributionList.Items[].[Id,Status]' --output text
 billing "Route 53 hosted zones (\$0.50/mo each)" aws route53 list-hosted-zones --query 'HostedZones[].Name' --output text
@@ -105,6 +101,14 @@ printf '  ECR total %s MB — free tier 500 MB, then $0.10/GB-month (~$%s/mo)\n'
 for bkt in $(aws s3api list-buckets --query 'Buckets[].Name' --output text); do
   printf '  S3  %-40s %s\n' "$bkt" "$(aws s3 ls "s3://$bkt" --recursive --summarize 2>/dev/null | awk '/Total Size/ { print $3 " bytes" }')"
 done
+# A filter on a single object ([?...] on KeyMetadata) returns null, so wrap it in a list.
+# Reported, not BILLING: foundation's CMK is a deliberate standing $1/month (D11), and a sweep
+# that fails every time stops being read.
+cmks=$(for k in $(a kms list-keys --query 'Keys[].KeyId' --output text); do
+  a kms describe-key --key-id "$k" \
+    --query '[KeyMetadata][?KeyManager==`CUSTOMER` && KeyState!=`PendingDeletion`].KeyId' --output text
+done | sed '/^$/d' | grep -c .)
+printf '  KMS customer-managed keys: %s at $1/mo each (foundation keeps 1, D11)\n' "$cmks"
 a logs describe-log-groups --query 'logGroups[?retentionInDays==null].logGroupName' --output text \
   | tr '\t' '\n' | sed '/^$/d;s/^/  Log group never expires: /'
 a ecs list-task-definitions --status ACTIVE --query 'length(taskDefinitionArns)' --output text \

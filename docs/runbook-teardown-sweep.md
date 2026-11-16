@@ -26,9 +26,9 @@ So the script has three tiers:
 
 | Tier | What it covers | Response |
 |---|---|---|
-| **BILLING** | Things that bill by the hour or month whether used or not: ECS tasks, load balancers, RDS (and its snapshots and retained backups), ElastiCache (and snapshots), WAF ACLs, NAT, EIPs and any public IPv4, EC2/EBS, interface endpoints, VPC links, stage caches, EventBridge connections and other secrets, customer KMS keys, provisioned concurrency, enabled schedules, running executions, non-on-demand tables, CloudFront, hosted zones | Exit 1. Tear it down |
-| **STANDING** | Billed by size: ECR against the 500 MB free tier, S3 objects, log groups that never expire, active task-definition revisions | Reported. Judge it |
-| **TAGS** | Project-named Lambdas, repositories, queues, tables, log groups, security groups and schedules that are missing from the tag index, plus the API Gateway APIs actually present (a stale index entry looks like a straggler) | Tag it or delete it |
+| **BILLING** | Things that bill by the hour or month whether used or not: ECS tasks, load balancers, RDS (and its snapshots and retained backups), ElastiCache (and snapshots), WAF ACLs, NAT, EIPs and any public IPv4, EC2/EBS, interface endpoints, VPC links, stage caches, EventBridge connections and other secrets, provisioned concurrency, enabled schedules, running executions, non-on-demand tables, CloudFront, hosted zones | Exit 1. Tear it down |
+| **STANDING** | Billed by size, or standing by design: ECR against the 500 MB free tier, S3 objects, customer-managed KMS keys (Phase 2 foundation keeps one, $1/month, D11), log groups that never expire, active task-definition revisions | Reported. Judge it |
+| **TAGS** | Project-named (Phase 2: `twr-*`) Lambdas, repositories, queues, tables, log groups, security groups and schedules that are missing from the tag index, plus the API Gateway APIs actually present (a stale index entry looks like a straggler) | Tag it or delete it |
 
 The BILLING tier queries each service directly, without going through tags, because the
 expensive mistakes (an ALB, a stopped-but-billing RDS, a replication group's leftover node)
