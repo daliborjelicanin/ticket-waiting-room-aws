@@ -144,6 +144,20 @@ run "templates_render_with_this_stack_names" {
     )
     error_message = "The dashboard is valid JSON, lists every DLQ and carries this stack's names."
   }
+
+  # PutDashboard's own rule, which valid JSON alone does not show: every metric row is an array
+  # (of strings, with an optional options object last). A flatten() once broke it (2026-11-16).
+  assert {
+    condition = alltrue([for w in jsondecode(aws_cloudwatch_dashboard.this.dashboard_body).widgets : (
+      w.type != "metric" || alltrue([for row in w.properties.metrics : (can(length(row)) && can(row[0]) && !can(tonumber(row)))])
+    )])
+    error_message = "Every metric row in every widget is an array, as PutDashboard requires."
+  }
+
+  assert {
+    condition     = length([for w in jsondecode(aws_cloudwatch_dashboard.this.dashboard_body).widgets : w if strcontains(try(w.properties.title, ""), "Lambdas") && try(length(w.properties.metrics), 0) == 6]) == 1
+    error_message = "The Lambda widget has three rows per function (errors, throttles, p99)."
+  }
 }
 
 run "queries_cover_the_runbooks" {

@@ -102,11 +102,12 @@ resource "aws_cloudwatch_dashboard" "this" {
     dlq_metrics = jsonencode([for k, name in var.dlq_names :
       ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", name, { label = k }]
     ])
-    lambda_metrics = jsonencode(flatten([for k, name in var.lambda_function_names : [
+    # concat(...), not flatten(): flatten is recursive and would spread each row into strings.
+    lambda_metrics = jsonencode(concat([for k, name in var.lambda_function_names : [
       ["AWS/Lambda", "Errors", "FunctionName", name, { label = "${k} errors", stat = "Sum" }],
       ["AWS/Lambda", "Throttles", "FunctionName", name, { label = "${k} throttles", stat = "Sum" }],
       ["AWS/Lambda", "Duration", "FunctionName", name, { label = "${k} p99 ms", stat = "p99", yAxis = "right" }],
-    ]]))
+    ]]...))
   })
 }
 

@@ -28,6 +28,12 @@ and passed, for the whole `infra/` tree rather than only the files touched:
    changes**, and nothing may be replaced unless that is the point of the change
 9. The slice checkbox in `docs/phase2-plan.md` updated in the same change
 
+**Source `tf-env.sh` on its own, never into a pipe** (`source … | sed` runs it in a subshell):
+`AWS_PROFILE` is then never set and Terraform falls back to the `default` profile, the
+management account. The state bucket's deny and `allowed_account_ids` stop it (2026-11-16),
+but check `[ "$AWS_PROFILE" = twr-dev ]` before any plan or apply. Mask account ids in what is
+printed afterwards, not in the sourcing.
+
 `apply` runs only when the owner says "apply" for that root (memory: AWS steps are the
 owner's), never as part of "done".
 
