@@ -1,0 +1,5 @@
+## 202: StartExecution returns no name, so the order id is cut from the execution ARN. Two
+## #sets, because Velocity allows no arithmetic inside a method argument (runbook-cognito-auth.md).
+#set($arn = $input.path('$.executionArn'))
+#set($cut = $arn.lastIndexOf(":") + 1)
+{"orderId": "$arn.substring($cut)", "status": "ACCEPTED"}

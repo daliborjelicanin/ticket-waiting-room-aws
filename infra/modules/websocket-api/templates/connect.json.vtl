@@ -1,0 +1,16 @@
+## $connect: one unconditional PutItem into the connection registry (runbook-websocket-queue.md).
+## Unauthenticated until D18's connect ticket (slice 6). Attribute names are ConnectionTableSchema's,
+## pinned by QueueSocketIT.theRowShapeTheMappingTemplateWritesIsTheOneTheLookupReads.
+## requestTimeEpoch is MILLISECONDS; TTL reads seconds and silently ignores anything else.
+#set($now = $context.requestTimeEpoch / 1000)
+#set($expiresAt = $now + 86400)
+{
+  "TableName": "${table_name}",
+  "Item": {
+    "connectionId": { "S": "$context.connectionId" },
+    "eventId":      { "S": "$util.escapeJavaScript($input.params('eventId'))" },
+    "token":        { "S": "$util.escapeJavaScript($input.params('token'))" },
+    "connectedAt":  { "N": "$now" },
+    "expiresAt":    { "N": "$expiresAt" }
+  }
+}

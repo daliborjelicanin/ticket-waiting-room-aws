@@ -34,6 +34,7 @@ locals {
   log_groups = {
     ecs      = { for s in local.ecs_services : s => "/twr/${var.env}/ecs/${s}" }
     lambda   = { for f, n in local.lambda_function_names : f => "/aws/lambda/${n}" }
+    apigw    = { for a in ["queue-socket", "edge"] : a => "/twr/${var.env}/apigw/${a}" }
     metrics  = "/twr/${var.env}/metrics"
     ecs_exec = "/twr/${var.env}/ecs-exec"
     # /aws/vendedlogs/ keeps Step Functions off the account's logs resource-policy size limit.
@@ -42,6 +43,8 @@ locals {
 
   collector_config_parameter = "/twr/${var.env}/otel-collector-config"
   saga_state_machine_name    = "${local.name_prefix}-checkout-saga"
+  # Both APIs' stage. Fixed: it is part of the invoke URL every QR encodes (D19).
+  api_stage_name = var.env
 
   db = {
     instance_identifier = "${local.name_prefix}-postgres"
@@ -226,12 +229,14 @@ module "iam" {
   db                         = local.db
   saga_state_machine_name    = local.saga_state_machine_name
   ses_from_address           = local.ses_sender
+
+  websocket_api_execution_arn = module.websocket_api.execution_arn
 }
 
 # --- Lambdas (D7, D22, retro §3) -------------------------------------------------------------
 # Images by digest, from var.image_digests (tf-env.sh resolves them from SSM, D15).
-# qr-generation and queue-notifier need the REST API's invoke URL and the WebSocket endpoint
-# (required env, typed never): each is wired in the same change as the API it depends on.
+# Every value in an environment is a reference (retro §2): the QR verify URL is the REST API's
+# invoke URL, the notifier's endpoint the WebSocket API's management endpoint.
 
 module "hold_cleanup" {
   source = "../../modules/lambda-function"
@@ -245,4 +250,38 @@ module "hold_cleanup" {
   environment = {
     SEAT_TABLE_NAME = module.seat_table.name # SeatTableSchema's table
   }
+}
+
+module "qr_generation" {
+  source = "../../modules/lambda-function"
+
+  function_name  = local.lambda_function_names["qr-generation"]
+  role_arn       = module.iam.role_arns["qr-generation-lambda"]
+  image_uri      = "${module.ecr.repository_urls["qr-generation-lambda"]}@${var.image_digests["qr-generation-lambda"]}"
+  timeout        = local.lambda_timeouts["qr-generation"]
+  log_group_name = local.log_groups.lambda["qr-generation"]
+
+  environment = {
+    QR_BUCKET              = module.qr_bucket.name
+    TICKET_VERIFY_BASE_URL = module.rest_api.invoke_url # TicketQrObjects.verificationUrl
+  }
+
+  sqs_event_source = { queue_arn = module.messaging.queue_arns["qr-generation"] }
+}
+
+module "queue_notifier" {
+  source = "../../modules/lambda-function"
+
+  function_name  = local.lambda_function_names["queue-notifier"]
+  role_arn       = module.iam.role_arns["queue-notifier-lambda"]
+  image_uri      = "${module.ecr.repository_urls["queue-socket-lambda"]}@${var.image_digests["queue-socket-lambda"]}"
+  timeout        = local.lambda_timeouts["queue-notifier"]
+  log_group_name = local.log_groups.lambda["queue-notifier"]
+
+  environment = {
+    CONNECTION_TABLE_NAME = module.connections_table.name # ConnectionTableSchema's table
+    WEBSOCKET_ENDPOINT    = module.websocket_api.management_endpoint
+  }
+
+  sqs_event_source = { queue_arn = module.messaging.queue_arns["queue-admissions"] }
 }

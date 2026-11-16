@@ -29,6 +29,7 @@ locals {
   log_group_arn = { for k, name in merge(
     { for s, n in var.log_groups.ecs : "ecs/${s}" => n },
     { for f, n in var.log_groups.lambda : "lambda/${f}" => n },
+    { for a, n in var.log_groups.apigw : "apigw/${a}" => n },
     { metrics = var.log_groups.metrics, ecs_exec = var.log_groups.ecs_exec, saga = var.log_groups.saga },
   ) : k => "${local.arn}:logs:${local.region}:${local.account_id}:log-group:${name}" }
 

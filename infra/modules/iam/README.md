@@ -28,6 +28,7 @@ No modules.
 | [aws_iam_role.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
 | [aws_iam_role_policy.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.apigateway_cloudwatch](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.collector](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.ecs_exec](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 | [aws_iam_policy_document.execution](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -58,7 +59,7 @@ No modules.
 | <a name="input_db"></a> [db](#input\_db) | Names the session stack gives the database pieces, so their secrets can be granted before they exist. | <pre>object({<br/>    instance_identifier  = string<br/>    service_secret_names = map(string) # checkout, ticketing<br/>  })</pre> | n/a | yes |
 | <a name="input_kms_key_arn"></a> [kms\_key\_arn](#input\_kms\_key\_arn) | The CMK; granted per role with kms:ViaService (D11). | `string` | n/a | yes |
 | <a name="input_lambda_function_names"></a> [lambda\_function\_names](#input\_lambda\_function\_names) | Function names by key; the scheduler role may invoke hold-cleanup only. | `map(string)` | n/a | yes |
-| <a name="input_log_groups"></a> [log\_groups](#input\_log\_groups) | Log group names the roles write to; the modules that create the groups take the same names. | <pre>object({<br/>    ecs      = map(string) # by ECS service key<br/>    lambda   = map(string) # by function key<br/>    metrics  = string      # collector EMF output<br/>    ecs_exec = string      # ECS Exec session audit<br/>    saga     = string      # Step Functions execution logs<br/>  })</pre> | n/a | yes |
+| <a name="input_log_groups"></a> [log\_groups](#input\_log\_groups) | Log group names the roles write to; the modules that create the groups take the same names. | <pre>object({<br/>    ecs      = map(string) # by ECS service key<br/>    lambda   = map(string) # by function key<br/>    apigw    = map(string) # API Gateway access logs, by API key<br/>    metrics  = string      # collector EMF output<br/>    ecs_exec = string      # ECS Exec session audit<br/>    saga     = string      # Step Functions execution logs<br/>  })</pre> | n/a | yes |
 | <a name="input_name_prefix"></a> [name\_prefix](#input\_name\_prefix) | Role name prefix, twr-<env> (D25). The boundary lets roles pass only <prefix>-* roles. | `string` | n/a | yes |
 | <a name="input_permissions_boundary_arn"></a> [permissions\_boundary\_arn](#input\_permissions\_boundary\_arn) | The boundary every role carries (bootstrap, D12, D14). | `string` | n/a | yes |
 | <a name="input_qr_bucket_arn"></a> [qr\_bucket\_arn](#input\_qr\_bucket\_arn) | QR bucket ARN. | `string` | n/a | yes |

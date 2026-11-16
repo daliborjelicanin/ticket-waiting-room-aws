@@ -48,6 +48,7 @@ variable "log_groups" {
   type = object({
     ecs      = map(string) # by ECS service key
     lambda   = map(string) # by function key
+    apigw    = map(string) # API Gateway access logs, by API key
     metrics  = string      # collector EMF output
     ecs_exec = string      # ECS Exec session audit
     saga     = string      # Step Functions execution logs

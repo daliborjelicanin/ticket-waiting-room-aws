@@ -1,0 +1,7 @@
+## $disconnect: delete the row API Gateway already holds the key of.
+{
+  "TableName": "${table_name}",
+  "Key": {
+    "connectionId": { "S": "$context.connectionId" }
+  }
+}

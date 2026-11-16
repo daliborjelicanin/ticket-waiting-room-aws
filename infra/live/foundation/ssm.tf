@@ -31,7 +31,22 @@ locals {
     },
     { for k, id in module.identity.m2m_client_ids : "cognito/${k}_client_id" => id },
     { for k, arn in module.iam.role_arns : "iam/role/${k}" => arn },
-    { "lambda/hold-cleanup/arn" = module.hold_cleanup.function_arn },
+    {
+      "lambda/hold-cleanup/arn"        = module.hold_cleanup.function_arn
+      "lambda/qr-generation/arn"       = module.qr_generation.function_arn
+      "lambda/queue-notifier/arn"      = module.queue_notifier.function_arn
+      "apigw/rest/id"                  = module.rest_api.rest_api_id
+      "apigw/rest/root_resource_id"    = module.rest_api.root_resource_id
+      "apigw/rest/proxy_resource_id"   = module.rest_api.proxy_resource_id
+      "apigw/rest/proxy_http_method"   = module.rest_api.proxy_http_method
+      "apigw/rest/execution_arn"       = module.rest_api.execution_arn
+      "apigw/rest/invoke_url"          = module.rest_api.invoke_url
+      "apigw/rest/definition_hash"     = module.rest_api.definition_hash
+      "apigw/rest/access_log_arn"      = module.rest_api.access_log_group_arn
+      "apigw/rest/stage_name"          = local.api_stage_name
+      "apigw/websocket/client_url"     = module.websocket_api.client_url
+      "apigw/websocket/management_url" = module.websocket_api.management_endpoint
+    },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
     { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },

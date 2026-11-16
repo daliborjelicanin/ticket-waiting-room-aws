@@ -16,6 +16,13 @@ locals {
       source_arn = null
       policy     = data.aws_iam_policy_document.purchase_apigw.json
     }
+    # API Gateway's account-wide CloudWatch role: WebSocket and REST stages can write access
+    # logs only through it. One per account and region (aws_api_gateway_account).
+    apigateway-cloudwatch = {
+      principal  = "apigateway.amazonaws.com"
+      source_arn = null
+      policy     = data.aws_iam_policy_document.apigateway_cloudwatch.json
+    }
     # EventBridge Scheduler invoking hold-cleanup. Phase 1's was auto-named by the console.
     hold-cleanup-scheduler = {
       principal  = "scheduler.amazonaws.com"
@@ -37,6 +44,21 @@ data "aws_iam_policy_document" "websocket_apigw" {
     sid       = "MaintainConnectionRegistry"
     actions   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
     resources = [var.connections_table_arn]
+  }
+}
+
+# The action set of AmazonAPIGatewayPushToCloudWatchLogs, which UpdateAccount checks for
+# itself: a policy scoped to the two access log groups was refused ("The role ARN does not
+# have required permissions configured", 2026-11-16, 3 min of retries, so not propagation).
+# The managed policy grants these on "*"; here they stop at this account and region.
+data "aws_iam_policy_document" "apigateway_cloudwatch" {
+  statement {
+    sid = "PushToCloudWatchLogsInThisAccountAndRegion"
+    actions = [
+      "logs:CreateLogGroup", "logs:CreateLogStream", "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams", "logs:PutLogEvents", "logs:GetLogEvents", "logs:FilterLogEvents",
+    ]
+    resources = ["${local.arn}:logs:${local.region}:${local.account_id}:*"]
   }
 }
 

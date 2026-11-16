@@ -1,0 +1,10 @@
+## 4xx from Step Functions. A duplicate orderId is the idempotent retry: 409, not an error. The
+## message is never passed through: Step Functions' text carries the state machine ARN, which
+## names the account.
+#set($type = $input.path('$.__type'))
+#if($type.contains("ExecutionAlreadyExists"))
+#set($context.responseOverride.status = 409)
+{"error": "PURCHASE_ALREADY_STARTED"}
+#else
+{"error": "PURCHASE_REJECTED"}
+#end
