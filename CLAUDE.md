@@ -149,6 +149,9 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `terraform fmt -recursive infra` and, from `infra/`,
   `tflint --init && tflint --recursive --config "$PWD/.tflint.hcl"` — the gates `ci.yml` runs
   (pre-commit runs `terraform fmt -check` when `.tf` files are staged)
+- `terraform -chdir=infra/modules/<module> init -backend=false && terraform -chdir=infra/modules/<module> test`
+  — module tests against a mocked provider (no AWS), for each module with a `tests/` directory;
+  `ci.yml` runs all of them
 - from `infra/`: `docker run --rm -v "$PWD":/src:ro -w /src aquasec/trivy:<version>@<digest>
   config --exit-code 1 --ignorefile .trivyignore.yaml .` — the IaC scan `ci.yml` runs (exact
   image there); a finding is fixed in code, or suppressed in `.trivyignore.yaml` with the

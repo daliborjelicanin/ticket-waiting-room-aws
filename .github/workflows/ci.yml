@@ -1,5 +1,5 @@
 # CI (D2, D14): the checks the ruleset on main requires — Gradle, and the Terraform gates (fmt,
-# validate, tflint, trivy). No AWS credentials here and no OIDC; slice 4 adds images.yml and
+# validate, terraform test, tflint, trivy). No AWS credentials here and no OIDC; slice 4 adds images.yml and
 # terraform.yml with their roles.
 name: ci
 
@@ -65,6 +65,18 @@ jobs:
             lock=(); [ -f "$dir/.terraform.lock.hcl" ] && lock=(-lockfile=readonly)
             terraform -chdir="$dir" init -backend=false -input=false "${lock[@]}"
             terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+      # Module tests (D2): plan against a mocked provider, so no credentials and no cost. They
+      # pin the retro's silent defaults (TTL, raw delivery, ReportBatchItemFailures, the KMS
+      # producer grants). A module is initialised on its own only to load the provider schema.
+      - name: terraform test
+        run: |
+          set -euo pipefail
+          for dir in $(find modules -name '*.tftest.hcl' -printf '%h\n' | xargs -n1 dirname | sort -u); do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" test
             echo "::endgroup::"
           done
       - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
