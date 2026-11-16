@@ -15,7 +15,7 @@ SQS queues, each with a DLQ and `redrive_allow_policy`, and SNS topics with raw-
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.73 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.73.0 |
 
 ## Modules
 
@@ -29,6 +29,7 @@ No modules.
 | [aws_sns_topic_subscription.queue](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
 | [aws_sqs_queue.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue) | resource |
 | [aws_sqs_queue.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue) | resource |
+| [aws_sqs_queue.subscription_dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue) | resource |
 | [aws_sqs_queue_policy.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue_policy) | resource |
 | [aws_sqs_queue_redrive_allow_policy.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue_redrive_allow_policy) | resource |
 | [aws_iam_policy_document.queue](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
@@ -49,7 +50,9 @@ No modules.
 | Name | Description |
 |------|-------------|
 | <a name="output_dlq_arns"></a> [dlq\_arns](#output\_dlq\_arns) | DLQ ARN by short name of its main queue (the DLQ-depth alarms, D16). |
+| <a name="output_dlq_names"></a> [dlq\_names](#output\_dlq\_names) | Every DLQ's name: by its queue's short name, and "delivery/<topic>/<queue>" for a subscription's DLQ (the DLQ alarms, D16). |
 | <a name="output_queue_arns"></a> [queue\_arns](#output\_queue\_arns) | Main queue ARN by short name. |
+| <a name="output_queue_names"></a> [queue\_names](#output\_queue\_names) | Main queue name by short name (the age alarms, D16). |
 | <a name="output_queue_urls"></a> [queue\_urls](#output\_queue\_urls) | Main queue URL by short name (contains the account id: not for committed files). |
 | <a name="output_topic_arns"></a> [topic\_arns](#output\_topic\_arns) | Topic ARN by short name. |
 | <a name="output_visibility_timeouts"></a> [visibility\_timeouts](#output\_visibility\_timeouts) | Derived visibility timeout by queue, in seconds (the oldest-message alarms, D16). |

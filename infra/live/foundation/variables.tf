@@ -60,3 +60,9 @@ variable "image_digests" {
     error_message = "Each digest is sha256:<64 hex characters>."
   }
 }
+
+variable "github_repository" {
+  description = "owner/name of this repository; alarm descriptions link to its docs/runbook-alarms.md. Public, so committable (as in bootstrap)."
+  type        = string
+  default     = "daliborjelicanin/ticket-waiting-room-aws"
+}

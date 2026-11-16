@@ -36,6 +36,12 @@ override_resource {
   values          = { arn = "arn:aws:sns:eu-central-1:aws:twr-test-purchase-confirmed" }
 }
 
+override_resource {
+  target          = aws_sqs_queue.subscription_dlq["purchase-confirmed/notifications"]
+  override_during = plan
+  values          = { arn = "arn:aws:sqs:eu-central-1:aws:twr-test-purchase-confirmed-to-notifications-dlq" }
+}
+
 mock_provider "aws" {
   # The real data source renders JSON; the mock would return random text, which the key /
   # queue policy argument rejects. The tests assert on the statements, not on the JSON.
@@ -132,6 +138,32 @@ run "subscription_is_raw_and_targets_its_queue" {
   assert {
     condition     = length(aws_sns_topic_subscription.queue) == 1
     error_message = "One subscription per (topic, subscribed queue)."
+  }
+
+  assert {
+    condition     = jsondecode(aws_sns_topic_subscription.queue["purchase-confirmed/notifications"].redrive_policy).deadLetterTargetArn == aws_sqs_queue.subscription_dlq["purchase-confirmed/notifications"].arn
+    error_message = "A subscription keeps what SNS cannot deliver in its own DLQ, instead of discarding it (D16)."
+  }
+
+  assert {
+    condition = (
+      aws_sqs_queue.subscription_dlq["purchase-confirmed/notifications"].kms_master_key_id == var.kms_key_arn
+      && aws_sqs_queue.subscription_dlq["purchase-confirmed/notifications"].message_retention_seconds == 1209600
+    )
+    error_message = "The subscription DLQ is encrypted like the others and keeps 14 days."
+  }
+
+  assert {
+    condition = anytrue([for s in data.aws_iam_policy_document.queue["delivery/purchase-confirmed/notifications"].statement : (
+      contains(s.actions, "sqs:SendMessage")
+      && anytrue([for c in s.condition : (c.variable == "aws:SourceArn" && contains(c.values, aws_sns_topic.this["purchase-confirmed"].arn))])
+    )])
+    error_message = "SNS may write into the subscription's DLQ, only for its topic."
+  }
+
+  assert {
+    condition     = output.dlq_names["delivery/purchase-confirmed/notifications"] == aws_sqs_queue.subscription_dlq["purchase-confirmed/notifications"].name
+    error_message = "The subscription DLQ is in dlq_names, so it gets an alarm."
   }
 }
 

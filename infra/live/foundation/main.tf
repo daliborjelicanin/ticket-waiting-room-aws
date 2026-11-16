@@ -43,6 +43,8 @@ locals {
 
   collector_config_parameter = "/twr/${var.env}/otel-collector-config"
   saga_state_machine_name    = "${local.name_prefix}-checkout-saga"
+  saga_state_machine_arn     = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.current.region}:${var.account_id}:stateMachine:${local.saga_state_machine_name}"
+  waf_acl_name               = "${local.name_prefix}-edge" # the session stack's web ACL (D6)
   # Both APIs' stage. Fixed: it is part of the invoke URL every QR encodes (D19).
   api_stage_name = var.env
 
@@ -68,6 +70,31 @@ module "observability" {
   name_prefix = local.name_prefix
   kms_key_arn = module.kms.key_arn
   alert_email = var.alert_email
+  repository  = var.github_repository
+
+  log_groups = merge(
+    { for s, n in local.log_groups.ecs : "ecs/${s}" => n },
+    { metrics = local.log_groups.metrics, saga = local.log_groups.saga },
+  )
+  ecs_exec_log_group         = local.log_groups.ecs_exec
+  collector_config_parameter = local.collector_config_parameter
+
+  queue_names           = module.messaging.queue_names
+  visibility_timeouts   = module.messaging.visibility_timeouts
+  dlq_names             = module.messaging.dlq_names
+  lambda_function_names = local.lambda_function_names
+  lambda_log_groups = {
+    hold-cleanup   = module.hold_cleanup.log_group_name
+    qr-generation  = module.qr_generation.log_group_name
+    queue-notifier = module.queue_notifier.log_group_name
+  }
+
+  websocket_api_id           = module.websocket_api.api_id
+  websocket_stage_name       = local.api_stage_name
+  websocket_access_log_group = module.websocket_api.access_log_group_name
+  saga_state_machine_arn     = local.saga_state_machine_arn
+  seat_table_name            = module.seat_table.name
+  waf_acl_name               = local.waf_acl_name
 }
 
 module "budgets" {

@@ -1,0 +1,42 @@
+# Collector configuration for every Fargate service's sidecar (observability-starter, D16).
+# Rendered by infra/modules/observability into SSM ${parameter_name}; the collector reads it
+# from AOT_CONFIG_CONTENT at task start. Traces to X-Ray, metrics as EMF into ${metrics_log_group}.
+extensions:
+  health_check:
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch/traces:
+    timeout: 1s
+    send_batch_size: 50
+  batch/metrics:
+    timeout: 60s
+
+exporters:
+  awsxray:
+  awsemf:
+    namespace: ${namespace}
+    log_group_name: ${metrics_log_group}
+    log_stream_name: otel-collector
+    dimension_rollup_option: NoDimensionRollup
+    # Cumulative counters are converted to per-step deltas here, and by default the first
+    # observation is swallowed as the baseline: a 20-way race whose increments all land in one
+    # step then exports as 0. Keep that first value.
+    retain_initial_value_of_delta_metric: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch/traces]
+      exporters: [awsxray]
+    metrics:
+      receivers: [otlp]
+      processors: [batch/metrics]
+      exporters: [awsemf]

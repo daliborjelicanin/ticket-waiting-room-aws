@@ -20,7 +20,7 @@ module "rest_api" {
   name                     = "${local.name_prefix}-edge"
   stage_name               = local.api_stage_name
   user_pool_arn            = module.identity.user_pool_arn
-  saga_state_machine_arn   = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.current.region}:${var.account_id}:stateMachine:${local.saga_state_machine_name}"
+  saga_state_machine_arn   = local.saga_state_machine_arn
   start_execution_role_arn = module.iam.role_arns["purchase-apigw"]
   access_log_group_name    = local.log_groups.apigw["edge"]
 }

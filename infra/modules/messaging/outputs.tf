@@ -22,3 +22,16 @@ output "topic_arns" {
   description = "Topic ARN by short name."
   value       = { for k, t in aws_sns_topic.this : k => t.arn }
 }
+
+output "queue_names" {
+  description = "Main queue name by short name (the age alarms, D16)."
+  value       = { for k, q in aws_sqs_queue.main : k => q.name }
+}
+
+output "dlq_names" {
+  description = "Every DLQ's name: by its queue's short name, and \"delivery/<topic>/<queue>\" for a subscription's DLQ (the DLQ alarms, D16)."
+  value = merge(
+    { for k, q in aws_sqs_queue.dlq : k => q.name },
+    { for k, q in aws_sqs_queue.subscription_dlq : "delivery/${k}" => q.name },
+  )
+}

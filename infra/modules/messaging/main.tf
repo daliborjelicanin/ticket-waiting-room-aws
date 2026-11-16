@@ -65,6 +65,18 @@ resource "aws_sns_topic" "this" {
   kms_master_key_id = var.kms_key_arn
 }
 
+# A subscription's own DLQ: when SNS cannot deliver to the queue (the queue's policy or the
+# key refuses it), it retries and then discards the message, with nothing failing anywhere a
+# human would look. With a DLQ the message is kept and the DLQ alarm fires (D16).
+resource "aws_sqs_queue" "subscription_dlq" {
+  for_each = local.subscription_topic
+
+  name                              = "${var.name_prefix}-${local.subscription_topic[each.key]}-to-${local.subscription_queue[each.key]}-dlq"
+  message_retention_seconds         = var.dlq_retention_seconds
+  kms_master_key_id                 = var.kms_key_arn
+  kms_data_key_reuse_period_seconds = 300
+}
+
 # Per subscription, and only for queues: SNS's envelope turned every field null in Phase 1
 # while the service reported success (retro §3).
 resource "aws_sns_topic_subscription" "queue" {
@@ -74,16 +86,32 @@ resource "aws_sns_topic_subscription" "queue" {
   protocol             = "sqs"
   endpoint             = aws_sqs_queue.main[local.subscription_queue[each.key]].arn
   raw_message_delivery = true
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.subscription_dlq[each.key].arn
+  })
 }
 
-# Every queue: TLS only. Subscribed queues: the topic may deliver, with aws:SourceArn as the
-# confused-deputy guard (without it any topic in any account could write here). Same-account
-# producers and consumers get access through their IAM roles, not here.
-data "aws_iam_policy_document" "queue" {
-  for_each = merge(
+# Every queue that gets a policy, keyed: a main queue by its name, its DLQ "<name>-dlq", a
+# subscription's DLQ "delivery/<topic>/<queue>". Flat maps (infra/CLAUDE.md).
+locals {
+  policy_queue_arn = merge(
     { for k, q in aws_sqs_queue.main : k => q.arn },
     { for k, q in aws_sqs_queue.dlq : "${k}-dlq" => q.arn },
+    { for k, q in aws_sqs_queue.subscription_dlq : "delivery/${k}" => q.arn },
   )
+  policy_queue_url = merge(
+    { for k, q in aws_sqs_queue.main : k => q.id },
+    { for k, q in aws_sqs_queue.dlq : "${k}-dlq" => q.id },
+    { for k, q in aws_sqs_queue.subscription_dlq : "delivery/${k}" => q.id },
+  )
+}
+
+# Every queue: TLS only. Subscribed queues, and each subscription's DLQ: the topic may deliver,
+# with aws:SourceArn as the confused-deputy guard (without it any topic in any account could
+# write here). Same-account producers and consumers get access through their IAM roles.
+data "aws_iam_policy_document" "queue" {
+  for_each = local.policy_queue_arn
 
   statement {
     sid       = "DenyInsecureTransport"
@@ -104,7 +132,11 @@ data "aws_iam_policy_document" "queue" {
   }
 
   dynamic "statement" {
-    for_each = [for k, q in local.subscription_queue : local.subscription_topic[k] if q == each.key]
+    for_each = (
+      startswith(each.key, "delivery/")
+      ? [split("/", each.key)[1]]
+      : [for k, q in local.subscription_queue : local.subscription_topic[k] if q == each.key]
+    )
 
     content {
       sid       = "AllowTopicDelivery${statement.key}"
@@ -128,6 +160,6 @@ data "aws_iam_policy_document" "queue" {
 resource "aws_sqs_queue_policy" "this" {
   for_each = data.aws_iam_policy_document.queue
 
-  queue_url = endswith(each.key, "-dlq") ? aws_sqs_queue.dlq[trimsuffix(each.key, "-dlq")].id : aws_sqs_queue.main[each.key].id
+  queue_url = local.policy_queue_url[each.key]
   policy    = each.value.json
 }
