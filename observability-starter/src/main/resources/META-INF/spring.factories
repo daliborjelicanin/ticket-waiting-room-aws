@@ -1,0 +1,3 @@
+# Lowest-precedence property defaults: health probes, graceful shutdown (ObservabilityDefaults).
+org.springframework.boot.EnvironmentPostProcessor=\
+com.ticketwaitingroom.observability.ObservabilityDefaults

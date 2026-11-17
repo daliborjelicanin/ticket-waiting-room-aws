@@ -134,6 +134,21 @@ that one path (GET only, status word only). All four ALB target groups probe it 
 `200` matcher since 2026-09-14, replacing slice 6's `GET /` → `200-499` matcher, which
 accepted a 401 as "alive" and so proved that Tomcat was up and nothing more.
 
+Phase 2's ALB probes **`/actuator/health/readiness`** instead (D7). The path is under the
+same permit (`/actuator/health/**`). Readiness is `REFUSING_TRAFFIC` while the application
+starts, including `security-starter`'s JWT warm-up, which runs before Boot reports ready,
+and again from the moment shutdown begins. A starting or draining task therefore gets no
+requests, where plain `/actuator/health` would have called it `UP`. Phase 3's Kubernetes
+probes read the same two groups.
+
+`ObservabilityDefaults`, an `EnvironmentPostProcessor` registered in `spring.factories`,
+adds three properties at the **lowest** precedence, so a service's own setting wins:
+`management.endpoint.health.probes.enabled=true`, `server.shutdown=graceful`, and
+`spring.lifecycle.timeout-per-shutdown-phase=30s`. All three are Boot 4's defaults. They
+are pinned because values outside the JVM are set from them: the ALB's health-check path,
+and the task's `stopTimeout` (45 s, which must exceed the 30 s phase or SIGKILL lands
+mid-drain).
+
 ## Proven
 
 `OtlpExportIT` — a throwaway web app exporting to a real OpenTelemetry collector in
@@ -145,3 +160,7 @@ processed under that trace with that parent; one without starts its own; a throw
 handler marks the span and still throws. `TicketingObservabilityAutoConfigurationTest` —
 ids are X-Ray-shaped, both headers are written, the SDK beans back off with no SDK on the
 classpath. `XrayIdGeneratorTest` — the leading eight hex digits are the epoch second.
+`ObservabilityDefaultsTest` — through a real `SpringApplication`: the readiness and
+liveness groups exist; shutdown is graceful with a 30 s phase; a service's own value
+overrides both. With the `spring.factories` entry removed, the shutdown assertion fails.
+The probe-group assertion still passes then, because the probes are Boot 4's own default.

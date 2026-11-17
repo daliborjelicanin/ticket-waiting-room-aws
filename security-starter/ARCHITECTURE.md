@@ -80,7 +80,12 @@ present a token, and a probe that needed one would mark every task unhealthy the
 the pool hiccupped. GET only, health only, a status word only. Everything else under
 `/actuator` is not exposed by the services in the first place (see `observability-starter`).
 
-`JwtDecoderWarmUp` runs after `ApplicationReadyEvent`, on a virtual thread, and hands the
+`JwtDecoderWarmUp` is an `ApplicationRunner`. It runs after the port opens and liveness is
+up, but before Boot publishes `ReadinessState.ACCEPTING_TRAFFIC`, which Boot does only once
+every runner has returned. So the ALB's readiness probe (`/actuator/health/readiness`,
+D7) answers 503 until the decoder is warm. The work runs on a virtual thread that the runner
+waits on for at most 30 s, because Nimbus's default client has no read timeout. Past that,
+the task reports ready and the fetch finishes in the background. The warm-up hands the
 decoder a well-formed RS256 token for the issuer whose `kid` no real key has. Verifying it
 forces every deferred step — discovery document, JWKS, two TLS handshakes, the JIT meeting
 Nimbus — and then fails, which is the expected outcome; a token that *passed* would be the
@@ -122,4 +127,6 @@ or 500. `TicketingSecurityAutoConfigurationTest` — the back-off and refuse-to-
 conditions, and the warm-up present by default and absent when switched off.
 `JwtDecoderWarmUpTest` — the probe token parses as RS256 for the issuer with `kid`
 `warm-up` and an all-zero signature; a rejected probe is not an error; an unreachable issuer
-is swallowed. `AccessTokenValidatorTest` — an ID token is refused on `token_use` alone.
+is swallowed. The runner returns only once the decoder is warm. A hung issuer holds it for
+the bounded wait and no longer. Through a real `SpringApplication`, `ACCEPTING_TRAFFIC` is
+published only after the warm-up finished. All three fail if the runner stops waiting. `AccessTokenValidatorTest` — an ID token is refused on `token_use` alone.

@@ -617,6 +617,20 @@ record what that review changed and why, and stay as the reasoning.
   - A task that is draining or still warming its JWKS cache then stops receiving traffic,
     instead of failing requests while "healthy". This is also the exact contract Phase 3's
     Kubernetes probes use, so it is written once.
+  - *Changed 2026-11-17, found implementing it.* Two premises above were wrong.
+    - **Boot 4 enables the probes by default.** `probes.enabled` defaults to `true` in Boot
+      4.1's metadata, so the line was already on. `observability-starter` now pins it anyway,
+      with graceful shutdown and the 30 s phase, through a lowest-precedence
+      `EnvironmentPostProcessor` (`ObservabilityDefaults`). The ALB path and `stopTimeout`
+      are set from these values, so a changed Boot default must not move them silently.
+    - **Readiness did not wait for the JWKS warm-up.** `JwtDecoderWarmUp` ran *after*
+      `ApplicationReadyEvent` on a virtual thread, and Boot publishes `ACCEPTING_TRAFFIC` at
+      that moment, so readiness went green before the warm-up began. It is now an
+      `ApplicationRunner`, which Boot completes before it reports ready. The runner waits on
+      the virtual thread for at most 30 s, because Nimbus's default client has no read
+      timeout. It still never fails startup: past 30 s, or with the pool unreachable, the
+      task reports ready and the first real token pays, as before. Proven by
+      `JwtDecoderWarmUpTest.bootReportsReadyOnlyAfterTheWarmUp`, a real `SpringApplication`.
   - `health_check_grace_period_seconds` comes from the measured startup, not a guess.
 - *Review: task size per service.*
   - 0.25 vCPU / 0.5 GB was Phase 1's measured weak point: a JWKS warm-up of 2.7–13.6 s, and the

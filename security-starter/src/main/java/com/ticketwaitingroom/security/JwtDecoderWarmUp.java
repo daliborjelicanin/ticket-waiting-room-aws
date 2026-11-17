@@ -3,14 +3,15 @@ package com.ticketwaitingroom.security;
 import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.ApplicationListener;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtDecoderInitializationException;
 import org.springframework.security.oauth2.jwt.JwtException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 
 /**
@@ -29,25 +30,50 @@ import java.util.Base64;
  * fetch the JWKS to discover the {@code kid} is not there — and then fails, as it must.
  * The failure is the expected outcome; a token that <em>passed</em> would be the alarm.
  *
- * <p>Runs after {@link ApplicationReadyEvent} on a virtual thread, so it never delays the
- * port opening and never fails startup: a pool that is unreachable at boot is logged and
- * met again by the first real request, exactly as before.
+ * <p><b>Part of readiness.</b> It runs as an {@link ApplicationRunner}: after the port is
+ * open and liveness is up, but <em>before</em> Boot reports the application ready, since
+ * Boot publishes {@code ReadinessState.ACCEPTING_TRAFFIC} only once every runner has
+ * returned. With observability-starter's probes on, the ALB's readiness check therefore
+ * answers 503 until the decoder is warm, and no customer request pays the 12.8 s (D7).
+ *
+ * <p>It still never fails startup, and never holds it for long. The work runs on a virtual
+ * thread that the runner waits on for at most {@link #DEFAULT_WAIT}. Nimbus's default
+ * client sets no read timeout, so an issuer that accepts the connection and then goes
+ * quiet must not keep the task unready until ECS replaces it. Past the wait, or with the
+ * pool unreachable, the task reports ready anyway, and the first real request pays, exactly
+ * as before. Gating readiness on the pool for longer would mark every task unhealthy the
+ * moment Cognito hiccupped, for a reason that says nothing about the task.
  */
-final class JwtDecoderWarmUp implements ApplicationListener<ApplicationReadyEvent> {
+final class JwtDecoderWarmUp implements ApplicationRunner {
+
+    /** Above the slowest warm-up measured on 0.25 vCPU (13.6 s, Phase 1), well under ECS's grace period. */
+    static final Duration DEFAULT_WAIT = Duration.ofSeconds(30);
 
     private static final Logger log = LoggerFactory.getLogger(JwtDecoderWarmUp.class);
 
     private final JwtDecoder decoder;
     private final String issuer;
+    private final Duration wait;
 
     JwtDecoderWarmUp(JwtDecoder decoder, String issuer) {
+        this(decoder, issuer, DEFAULT_WAIT);
+    }
+
+    JwtDecoderWarmUp(JwtDecoder decoder, String issuer, Duration wait) {
         this.decoder = decoder;
         this.issuer = issuer;
+        this.wait = wait;
     }
 
     @Override
-    public void onApplicationEvent(@NonNull ApplicationReadyEvent event) {
-        Thread.ofVirtual().name("jwt-warm-up").start(this::warmUp);
+    public void run(@NonNull ApplicationArguments args) throws InterruptedException {
+        Thread worker = Thread.ofVirtual().name("jwt-warm-up").start(this::warmUp);
+        if (!worker.join(wait)) {
+            // Left running: it finishes the fetch in the background, so the first real token
+            // still finds the work begun. Readiness does not wait for it.
+            log.warn("JWT warm-up still running after {} s; reporting ready, the first real token may pay for it",
+                    wait.toSeconds());
+        }
     }
 
     void warmUp() {
