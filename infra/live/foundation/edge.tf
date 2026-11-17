@@ -25,6 +25,67 @@ module "rest_api" {
   access_log_group_name    = local.log_groups.apigw["edge"]
 }
 
+# WAF logs (D6). Here, not in session: the web ACL is destroyed after every session, and its
+# logs must outlive it, or a block cannot be explained after the fact. WAF delivers only to a
+# bucket named aws-waf-logs-*, the one exception to the twr- prefix (D25). SSE-S3 like the flow
+# logs (D11): the Authorization header is redacted before delivery, so no credential lands here.
+module "waf_log_bucket" {
+  source = "../../modules/s3"
+
+  name              = "aws-waf-logs-${local.name_prefix}"
+  expiration_days   = 7
+  force_destroy     = true # logs only
+  extra_policy_json = data.aws_iam_policy_document.waf_log_delivery.json
+}
+
+data "aws_iam_policy_document" "waf_log_delivery" {
+  statement {
+    sid       = "WafLogDeliveryAclCheck"
+    actions   = ["s3:GetBucketAcl"]
+    resources = [module.waf_log_bucket.arn]
+
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${var.account_id}:*"]
+    }
+  }
+
+  statement {
+    sid       = "WafLogDeliveryWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${module.waf_log_bucket.arn}/AWSLogs/${var.account_id}/*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:${data.aws_partition.current.partition}:logs:${data.aws_region.current.region}:${var.account_id}:*"]
+    }
+  }
+}
+
 # Account-wide, per region: the role every REST and WebSocket stage writes access logs with.
 resource "aws_api_gateway_account" "this" {
   cloudwatch_role_arn = module.iam.role_arns["apigateway-cloudwatch"]

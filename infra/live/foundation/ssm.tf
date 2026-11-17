@@ -46,6 +46,8 @@ locals {
       "apigw/rest/stage_name"          = local.api_stage_name
       "apigw/websocket/client_url"     = module.websocket_api.client_url
       "apigw/websocket/management_url" = module.websocket_api.management_endpoint
+      "waf/acl_name"                   = local.waf_acl_name
+      "waf/log_bucket_arn"             = module.waf_log_bucket.arn
     },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },

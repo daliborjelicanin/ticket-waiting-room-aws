@@ -481,6 +481,12 @@ record what that review changed and why, and stay as the reasoning.
   - Spike in slice 2: confirm the provider argument name for the target (the CLI calls it
     `--integration-target`; AWS's Serverless Land pattern deploys it with Terraform) and
     eu-central-1 availability.
+  - *Spike result 2026-11-17: confirmed.* The argument is `integration_target` (AWS provider
+    6.73), eu-central-1 accepts it, and a request through the public `dev` stage returns the
+    internal ALB's own `404 {"error":"NO_ROUTE"}` in 5 ms of integration latency. The fallback
+    is not needed. Note that a fresh stage answers 500 for a minute or two (`integrationStatus`
+    `-`, the request never sent) before it picks up the new link
+    (`runbook-session-edge.md` §3).
 - *Review: the saga's calls hairpin through the public stage.*
   - Step Functions calls the services through `/{proxy+}` with its M2M token, so they pass the
     WAF too. That is acceptable and even good: one path, one WAF, one JWT check.
@@ -531,6 +537,13 @@ record what that review changed and why, and stay as the reasoning.
   - **Spike in slice 2:** confirm WAF computes JA4 for an ACL attached to a REST API stage. The
     announcement is written around CloudFront and ALB. If it does not, the fleet guard waits for
     CloudFront (not built) and the other four still stand.
+  - *Spike result 2026-11-17: not computed.* With a JA4-keyed rate rule on the REST stage's
+    ACL, all 46 logged requests from two different TLS clients (curl and Python) carry **no**
+    `ja4Fingerprint` field, and no `ja3Fingerprint` either. **Changed 2026-11-17: the fleet
+    guard is dropped from the REST-stage ACL** and waits for CloudFront (D5's documented
+    alternative, not built). The flood guard, credential guard, Bot Control and the
+    anonymous-IP list still stand, so the buyer rules are four, and the cost estimate's rule
+    count drops by one. The same logs confirmed `Authorization` arrives as `REDACTED`.
   - The anonymous-IP rule must **never** cover the paths the saga calls. Step Functions comes
     from AWS addresses, which is exactly what that list blocks. The scope-down is the guarantee.
 - **Baseline on the whole stage.** A real edge always carries the AWS managed baseline:
@@ -545,6 +558,11 @@ record what that review changed and why, and stay as the reasoning.
   `Authorization` header **redacted** in the logging configuration and a 7-day lifecycle. Without
   logs, a block cannot be explained after the fact, and every serious edge keeps them. The
   sampled requests in the console are a 3-hour window, not a record.
+  - *Changed 2026-11-17: the bucket is foundation's,* `aws-waf-logs-twr-<env>-<account-id>`
+    (`live/foundation/edge.tf`, the `s3` module, SSE-S3 like the flow logs). The ACL is
+    session-only, and a bucket destroyed with it would take the evidence with it. Its name
+    is the one exception to the `twr-` prefix (D25), because WAF delivers only to
+    `aws-waf-logs-*`. Session reads it from SSM (`waf/log_bucket_arn`, with `waf/acl_name`).
 - *Review: the load test and the bot rules cannot be the same run, and the plan should say so.*
   k6 from one machine looks like what Bot Control and the flood guard exist to stop. Phase 1
   hit this, and the retro asked for "a run with Bot Control enforced". The honest design is two
@@ -1469,7 +1487,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - **Learn:** module boundaries, SSM as stack interface
 
 ### 2. Session edge + seat inventory — ≈ $0.13/h
-- [ ] **Spike D5** (VPC Link v2 for REST → internal ALB, provider argument for the target) and **D6** (is JA4 computed for a REST-stage ACL?)
+- [x] **Spike D5** (VPC Link v2 for REST → internal ALB, provider argument for the target) and **D6** (is JA4 computed for a REST-stage ACL?) — *run 2026-11-17. **D5 confirmed**: the stage reaches the internal ALB through VPC Link v2 (ALB's own 404 through the public stage). **D6: JA4 is not computed** for a REST-stage ACL (no `ja4Fingerprint` or `ja3Fingerprint` in any of 46 records from two TLS clients), so the fleet guard leaves the ACL (D6, changed 2026-11-17). `Authorization` redaction verified. Foundation's part (WAF log bucket + 2 SSM parameters, 8 added) applied, second plan clean; session 9 added with both toggles on, No changes with them off. Built: `modules/alb` (internal, `drop_invalid_header_fields`, default action a fixed `404 {"error":"NO_ROUTE"}` so a response proves the ALB answered), `modules/rest-stage` (`aws_apigatewayv2_vpc_link`, `HTTP_PROXY` + `VPC_LINK` + `integration_target` = the ALB ARN, URI `http://<alb-dns>/{proxy}`, deployment on `definition_hash`, stage with X-Ray and access logs), `modules/waf` (the JA4 fleet guard alone, count mode, logs to S3 with `authorization` redacted); session toggles `enable_alb`, `enable_waf`; foundation gains the WAF log bucket (D6, changed 2026-11-17). 10 module tests, 9 guards proven by breaking them. trivy with the toggles on: one finding, AWS-0054 (HTTP listener), suppressed with D5. Run steps: [`runbook-session-edge.md`](runbook-session-edge.md)*
 - [ ] NAT, internal ALB, VPC link + private integration, REST stage, method throttling, WAF (buyer rules on queue join + purchase, baseline in count mode, logging to S3, D6)
 - [ ] `ecs-service` module with autoscaling; seat-inventory on ARM64 / Spot
 - [ ] Saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5)

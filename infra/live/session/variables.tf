@@ -20,3 +20,20 @@ variable "env" {
   type        = string
   default     = "dev"
 }
+
+variable "enable_alb" {
+  description = "Internal ALB, VPC Link v2, the /{proxy+} private integration, deployment and stage (D5). Off = the REST API has no stage."
+  type        = bool
+  default     = false
+}
+
+variable "enable_waf" {
+  description = "Web ACL on the REST stage, with logging (D6). Needs enable_alb: the ACL attaches to the stage."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_waf || var.enable_alb
+    error_message = "enable_waf needs enable_alb: without the ALB there is no stage to attach the ACL to."
+  }
+}

@@ -75,3 +75,10 @@ misconfigurations:
       D5: ANY /{proxy+} carries no API Gateway authorizer because every service verifies the
       Cognito JWT itself (security-starter: signature, issuer, expiry, token_use = access) on
       every request, the saga's included. The edge's own check is on POST /purchase only.
+
+  - id: AWS-0054
+    paths: ["modules/alb/main.tf"]
+    statement: >-
+      D5: the listener is on an internal ALB whose SG admits only the VPC link's SG, so the hop
+      never leaves the VPC. TLS there needs a certificate, which needs the deferred domain (D20)
+      or a ~$400/month private CA; HTTPS end to end is the first change if D20 comes back.
