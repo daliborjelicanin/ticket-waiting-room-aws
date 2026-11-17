@@ -142,13 +142,32 @@ a apigateway get-rest-apis --query 'items[].[id,name]' --output text | sed 's/^/
 if [[ ${ALL_REGIONS:-0} == 1 ]]; then
   echo
   echo "== OTHER REGIONS (tag index, EC2, load balancers, RDS)"
+  # count <region> <aws args...>: a number, "scp" when a service control policy denies the call
+  # (a region the organization blocks, D12: nothing can exist there), or "error" for any other
+  # failure. An error is a finding, never a zero: a sweep that could not look must not say clean.
+  errf=$(mktemp); trap 'rm -f "$errf"' EXIT
+  count() {
+    local r=$1 out; shift
+    if out=$(aws --region "$r" "$@" --output text 2>"$errf"); then echo "$out"
+    elif grep -q 'service control policy' "$errf"; then echo scp
+    else echo error; fi
+  }
   for r in $(aws ec2 describe-regions --query 'Regions[].RegionName' --output text); do
     [[ $r == "$REGION" ]] && continue
-    t=$(aws --region "$r" resourcegroupstaggingapi get-resources --tag-filters "Key=$TAG_KEY,Values=$TAG_VALUE" --query 'length(ResourceTagMappingList)' --output text 2>/dev/null)
-    e=$(aws --region "$r" ec2 describe-instances --filters Name=instance-state-name,Values=running,stopped --query 'length(Reservations)' --output text 2>/dev/null)
-    l=$(aws --region "$r" elbv2 describe-load-balancers --query 'length(LoadBalancers)' --output text 2>/dev/null)
-    d=$(aws --region "$r" rds describe-db-instances --query 'length(DBInstances)' --output text 2>/dev/null)
-    flag=""; [[ "$e$l$d" != 000 ]] && { flag="  <-- BILLING"; hits=$((hits + 1)); }
+    t=$(count "$r" resourcegroupstaggingapi get-resources --tag-filters "Key=$TAG_KEY,Values=$TAG_VALUE" --query 'length(ResourceTagMappingList)')
+    e=$(count "$r" ec2 describe-instances --filters Name=instance-state-name,Values=running,stopped --query 'length(Reservations)')
+    l=$(count "$r" elbv2 describe-load-balancers --query 'length(LoadBalancers)')
+    d=$(count "$r" rds describe-db-instances --query 'length(DBInstances)')
+    if [[ "$t$e$l$d" == scpscpscpscp ]]; then
+      printf '  %-16s denied by SCP\n' "$r"
+      continue
+    fi
+    flag=""
+    if [[ " $e $l $d " == *" error "* || " $e $l $d " == *" scp "* ]]; then
+      flag="  <-- UNKNOWN: a call failed, so this region was not checked"; hits=$((hits + 1))
+    elif [[ "$e$l$d" != 000 ]]; then
+      flag="  <-- BILLING"; hits=$((hits + 1))
+    fi
     printf '  %-16s tagged=%s ec2=%s elb=%s rds=%s%s\n' "$r" "$t" "$e" "$l" "$d" "$flag"
   done
 fi

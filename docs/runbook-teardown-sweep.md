@@ -14,6 +14,11 @@ found, so Phase 2 can run it after every `terraform destroy`.
 ALL_REGIONS=1 ./scripts/teardown-sweep.sh   # also every enabled region, ~2 min
 ```
 
+In `twr-dev`, the organization's region SCP (D12) denies every region but eu-central-1 and
+us-east-1, so `ALL_REGIONS=1` prints those regions as `denied by SCP`: nothing can exist there,
+and they are not findings. Any other failed call prints `UNKNOWN` and **is** a finding (exit 1):
+a region the sweep could not look at is never reported clean.
+
 ## Why A Tag Search Alone Is Not The Sweep
 
 The plan's line was "tag-based search for stragglers", and the tag search is where the
