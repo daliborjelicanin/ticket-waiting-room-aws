@@ -72,3 +72,58 @@ variable "loadtest_allow_cidr" {
   default     = null
   sensitive   = true
 }
+
+variable "services" {
+  description = "ECS services to run (D7, D23). A service joins this list once its wiring is in main.tf; the others follow in slice 3. Needs enable_nat (ECR, logs, Cognito's JWKS) and, for an HTTP service, enable_alb."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for s in var.services : contains(["seat-inventory"], s)])
+    error_message = "Only seat-inventory is wired so far."
+  }
+
+  validation {
+    condition     = length(var.services) == 0 || (var.enable_nat && var.enable_alb)
+    error_message = "Services need enable_nat (nothing in a task starts without egress, D4) and enable_alb (their routes)."
+  }
+}
+
+variable "image_digests" {
+  description = "Deployed image digest per Gradle module (sha256:...), resolved from SSM /twr/<env>/images at dispatch by tf-env.sh or the workflow (D15). Never read from SSM by Terraform, so the plan shows what runs."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for d in values(var.image_digests) : can(regex("^sha256:[0-9a-f]{64}$", d))])
+    error_message = "Each digest is sha256:<64 hex characters>."
+  }
+}
+
+variable "capacity" {
+  description = "FARGATE_SPOT (dev sessions) or FARGATE (the D7 mix: one on-demand task, Spot above it; the proof run)."
+  type        = string
+  default     = "FARGATE_SPOT"
+
+  validation {
+    condition     = contains(["FARGATE_SPOT", "FARGATE"], var.capacity)
+    error_message = "capacity is FARGATE_SPOT or FARGATE."
+  }
+}
+
+variable "desired_count" {
+  description = "Tasks per service at start, and the autoscaling minimum."
+  type        = number
+  default     = 1
+}
+
+variable "task_size" {
+  description = "Per service: feature (0.25 vCPU) or proof (0.5 vCPU), 1 GB either way (D7). Unlisted services run feature."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for v in values(var.task_size) : contains(["feature", "proof"], v)])
+    error_message = "task_size values are feature or proof."
+  }
+}

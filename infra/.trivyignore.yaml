@@ -83,3 +83,9 @@ misconfigurations:
       D5: the listener is on an internal ALB whose SG admits only the VPC link's SG, so the hop
       never leaves the VPC. TLS there needs a certificate, which needs the deferred domain (D20)
       or a ~$400/month private CA; HTTPS end to end is the first change if D20 comes back.
+
+  - id: AWS-0034
+    paths: ["live/session/main.tf"]
+    statement: >-
+      D7: Container Insights is billed per metric and duplicates the services' own meters
+      (OTLP to the collector sidecar) plus ECS's free service metrics.

@@ -33,3 +33,43 @@ variable "idle_timeout_seconds" {
     error_message = "Keep the idle timeout above API Gateway's 29 s integration timeout."
   }
 }
+
+variable "name_prefix" {
+  description = "twr-<env>; target groups are named <prefix>-<service>-tg (D25)."
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "The VPC the target groups live in."
+  type        = string
+}
+
+variable "service_port" {
+  description = "Port every HTTP service listens on (each Dockerfile EXPOSEs 8080; the SG rules in modules/network allow it)."
+  type        = number
+  default     = 8080
+}
+
+variable "routes" {
+  description = "Per service: listener rule priority and path patterns (ALB globs, * crosses /, at most 5). Only running services get a route; anything else gets the default NO_ROUTE 404."
+  type = map(object({
+    priority = number
+    paths    = list(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.routes) : (length("${var.name_prefix}-${k}-tg") <= 32)])
+    error_message = "Target group names (<prefix>-<service>-tg) are at most 32 characters (D25)."
+  }
+
+  validation {
+    condition     = length(distinct([for r in values(var.routes) : r.priority])) == length(var.routes)
+    error_message = "Each route needs its own priority: the ALB refuses two rules with one number."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.routes) : (length(r.paths) >= 1 && length(r.paths) <= 5)])
+    error_message = "A listener rule takes 1 to 5 path patterns."
+  }
+}

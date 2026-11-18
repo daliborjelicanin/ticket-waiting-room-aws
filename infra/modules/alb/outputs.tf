@@ -17,3 +17,13 @@ output "listener_arn" {
   description = "The HTTP listener, which the services' path rules attach to."
   value       = aws_lb_listener.http.arn
 }
+
+output "target_group_arns" {
+  description = "Target group ARN per routed service, for ecs-service's load_balancer block."
+  value       = { for k, tg in aws_lb_target_group.service : k => tg.arn }
+}
+
+output "target_group_arn_suffixes" {
+  description = "Target group ARN suffix per routed service: the TargetGroup dimension, and half of the ALBRequestCountPerTarget resource label."
+  value       = { for k, tg in aws_lb_target_group.service : k => tg.arn_suffix }
+}

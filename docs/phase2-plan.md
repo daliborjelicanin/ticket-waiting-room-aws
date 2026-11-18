@@ -646,6 +646,11 @@ record what that review changed and why, and stay as the reasoning.
     losers' p99 queued behind one task.
   - Feature slices keep 0.25 / 0.5. The proof runs **0.5 vCPU / 1 GB × 2 tasks across AZs**, so
     the numbers show the system rather than CPU starvation.
+  - *Changed 2026-11-18, found writing `modules/ecs-service`.* Feature slices run **0.25 vCPU /
+    1 GB**, not 0.5 GB. The task also carries the collector sidecar, which keeps 256 MB, and
+    the JVM sizes its heap from what is left (`MaxRAMPercentage` against the container's hard
+    limit). Phase 1 moved to 1 GB for exactly this when it added the sidecar
+    (`runbook-observability.md`). Cost: about $0.002/h more per task.
 - *Review: scale ahead, then track.* An on-sale is a **scheduled** spike. Fargate needs about a
   minute to place a task and the JVM needs more to warm, so reactive scaling alone arrives after
   the door has already opened. Ticketing platforms pre-scale for a known on-sale time. Use both:
@@ -669,6 +674,17 @@ record what that review changed and why, and stay as the reasoning.
   - `readonlyRootFilesystem = true`, with a small writable `/tmp` volume for Tomcat;
   - `linuxParameters { capabilities { drop = ["ALL"] } }`;
   - no privileged mode.
+  - *Added 2026-11-18, found writing `modules/ecs-service`.* A read-only root conflicts with
+    ECS Exec (D9). AWS documents ECS Exec as unsupported on a read-only root filesystem,
+    because its SSM agent writes into the container. AWS re:Post's workaround is used: two more
+    writable task-storage mounts, at `/var/lib/amazon/ssm` and `/var/log/amazon/ssm`.
+    - It is unsupported, so the first session proves it with a real `execute-command`.
+    - If it fails, Exec wins and the application container's root goes writable. The bastion
+      is how `psql` reaches the private database; the hardening is a reviewer's default.
+  - *Found 2026-11-18, first apply.* Fargate creates a task-storage mount root-owned `0755`,
+    so the non-root `app` user could not write `/tmp` and Tomcat did not start. The image
+    now declares `VOLUME ["/tmp"]`, and Fargate seeds the mount from the image's `/tmp`
+    (`1777`). Every service Dockerfile needs the same line.
 - *Review: logging.* Keep the `awslogs` driver, with `mode = "non-blocking"` and a
   `max-buffer-size` pinned explicitly. In blocking mode, a CloudWatch hiccup stalls the
   application's own threads, which during a door-open looks like a concurrency bug that is not
@@ -1512,7 +1528,29 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 ### 2. Session edge + seat inventory — ≈ $0.13/h
 - [x] **Spike D5** (VPC Link v2 for REST → internal ALB, provider argument for the target) and **D6** (is JA4 computed for a REST-stage ACL?) — *run 2026-11-17. **D5 confirmed**: the stage reaches the internal ALB through VPC Link v2 (ALB's own 404 through the public stage). **D6: JA4 is not computed** for a REST-stage ACL (no `ja4Fingerprint` or `ja3Fingerprint` in any of 46 records from two TLS clients), so the fleet guard leaves the ACL (D6, changed 2026-11-17). `Authorization` redaction verified. Foundation's part (WAF log bucket + 2 SSM parameters, 8 added) applied, second plan clean; session 9 added with both toggles on, No changes with them off. Built: `modules/alb` (internal, `drop_invalid_header_fields`, default action a fixed `404 {"error":"NO_ROUTE"}` so a response proves the ALB answered), `modules/rest-stage` (`aws_apigatewayv2_vpc_link`, `HTTP_PROXY` + `VPC_LINK` + `integration_target` = the ALB ARN, URI `http://<alb-dns>/{proxy}`, deployment on `definition_hash`, stage with X-Ray and access logs), `modules/waf` (the JA4 fleet guard alone, count mode, logs to S3 with `authorization` redacted); session toggles `enable_alb`, `enable_waf`; foundation gains the WAF log bucket (D6, changed 2026-11-17). 10 module tests, 9 guards proven by breaking them. trivy with the toggles on: one finding, AWS-0054 (HTTP listener), suppressed with D5. Run steps: [`runbook-session-edge.md`](runbook-session-edge.md)*
 - [x] NAT, internal ALB, VPC link + private integration, REST stage, method throttling, WAF (buyer rules on queue join + purchase, baseline in count mode, logging to S3, D6) — *applied and checked 2026-11-17, then destroyed (sweep clean). `modules/nat`: zonal in AZ a with an EIP and a default route in each app route table; `regional` behind `nat_mode` (D4). `modules/rest-stage`: + the queue integrations and method throttling on `POST` queue join and `POST` purchase only (D6, added 2026-11-17: foundation's new `/events/{eventId}/queue` resource). `modules/waf`: the spike's JA4 rule replaced by a `buyer-entry` label rule (`POST` + a regex built from the published resource paths) and four buyer rules scoped to it: flood guard 300/min per IP, credential guard 30/min per `Authorization`, anonymous-IP, Bot Control common. The baseline (IP reputation, known bad inputs, common rule set) runs on the whole stage in `count` mode (`waf_baseline_mode`). An optional `loadtest_allow_cidr` allow rule comes first. Session toggles `enable_nat`, `nat_mode`, `waf_baseline_mode`, `loadtest_allow_cidr` (sensitive, `-var` only). 57 module test runs pass across `infra/`, 9 new guards each proven by breaking it. trivy clean with every toggle on. Foundation applied 2026-11-17 (6 added, 1 in place). Its second plan was **not** clean: `definition_hash` changed again, because the hash covers whole resource objects and a newly created method reads back with attributes it did not have at create time. One more apply converged, then two plans in a row showed No changes. Expect this once after any apply that creates a resource feeding the hash. Session: 18 added with `enable_nat`, `enable_alb` and `enable_waf` on, No changes with them off. Read back from AWS: the zonal NAT `available` in the first public subnet, an active default route to it in all three app route tables; method settings on `POST` purchase (100/200) and `POST` queue (500/1000) only; the eight rules in order. Twelve requests (curl and a browser User-Agent), checked in the WAF logs: the `buyer-entry` label on exactly the four `POST` queue and purchase requests, and none on the queue poll, `/queue/admit`, `/seats` or `/orders/o1/payment`. Bot Control (`CategoryHttpLibrary`) blocked curl on the two entry points only. The browser User-Agent reached the ALB on queue join and the Cognito authorizer (401) on purchase. `GET` on the new queue resource reaches the ALB, and `/queue/admit` still falls through to `/{proxy+}`. The count-mode baseline matched nothing: no false positives on this traffic, but the saga's own requests arrive only in slice 3, so the baseline stays in count. k6 identifies itself as an HTTP library, so the load test needs `loadtest_allow_cidr`, as D6 says*
-- [ ] `ecs-service` module with autoscaling; seat-inventory on ARM64 / Spot
+- [x] `ecs-service` module with autoscaling; seat-inventory on ARM64 / Spot — *applied and checked 2026-11-18.*
+  - **ECS Exec works on the read-only root** (D7, D9): a real `execute-command` session ran in the seat-inventory container. `/tmp` is writable, and a write to `/app` fails with `Read-only file system`. The whole session is recorded in `/twr/dev/ecs-exec`, its transcript included.
+    - Exec runs as `uid=0`: the SSM agent's user, not the application's `app` (1001). It is root with every capability dropped and a read-only root filesystem.
+    - The collector sidecar's agent stays `STOPPED`: that image has no shell, and nothing needs to exec into it.
+  - **Built.**
+    - `modules/ecs-service` holds the task definition, the service and autoscaling, and nothing else (D21): ARM64, `FARGATE_SPOT`, or the D7 mix behind `capacity`.
+    - Deployments: circuit breaker with rollback, `wait_for_steady_state`, 100/200.
+    - Containers: read-only root with writable `/tmp` and the two SSM agent paths, every capability dropped, `awslogs` non-blocking with a 25m buffer, `stopTimeout` 45, the ADOT sidecar.
+    - Scaling: target tracking on `ALBRequestCountPerTarget`, plus optional scheduled actions.
+    - `modules/alb` gains the target groups (IP targets, `/actuator/health/readiness`, 30 s deregistration delay) and the path rules (D21).
+    - Session: the `twr-dev` cluster (Container Insights off, Exec sessions logged to `/twr/dev/ecs-exec`), and the toggles `services`, `image_digests`, `capacity`, `desired_count`, `task_size`.
+    - 13 + 8 module test runs; 16 guards proven by breaking them.
+  - **Image.** Built for arm64 by hand under QEMU (the Dockerfile has `RUN` steps, unlike the Lambdas'), digest in `/twr/dev/images/seat-inventory-service`. ECR scan: 13 HIGH, all Ubuntu base packages, none in the jars.
+  - **The first apply failed, by design.** The circuit breaker stopped it: Tomcat could not create its work directory in `/tmp`, a root-owned Fargate mount (see D7, 2026-11-18). After the Dockerfile fix the re-apply replaced the tainted service.
+  - **Read back from AWS.**
+    - 1/1 running on `FARGATE_SPOT`, arm64, rollout `COMPLETED`, target `healthy`.
+    - Ready about 55 s after container start on 0.25 vCPU: Boot 46 s, then the JWKS warm-up 4 s, with readiness after it (D7). The grace period stays 120 s.
+    - Requests through the stage: the seat paths reach the service (Spring Security's `Bearer invalid_token` 401), and an unclaimed path gets `404 NO_ROUTE`.
+    - The collector: X-Ray traces, and EMF `http.server.requests` in `/twr/dev/metrics`.
+  - **Second plan not clean at first.** ECS stores container definitions with empty lists and `hostPort` filled in, so every plan replaced the task definition. They are now written out, and a test guards them. Second plan: **No changes**.
+  - **Found, open.**
+    - Spring Security 7's `WWW-Authenticate` carries `resource_metadata="http://<internal ALB DNS>/.well-known/oauth-protected-resource"`, built from the `Host` API Gateway sends, so every unauthenticated caller learns the internal ALB's name. To fix in `security-starter`.
+    - The 401 requests' traces are not joined to the edge's trace: only `security filterchain` spans arrive.
 - [ ] Saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5)
 - [ ] Verify: `k6/seat-race.js` through the edge → exactly one winner per seat; flow logs show DynamoDB and ECR layer traffic **not** via the NAT; WAF baseline sampled requests reviewed → block
 - **Learn:** private integration, SG chains, why ECR pulls go via the S3 endpoint
