@@ -15,6 +15,8 @@ data "aws_partition" "current" {}
 data "aws_region" "current" {}
 
 locals {
+  queue_methods = ["GET", "POST"]
+
   invoke_url = "https://${aws_api_gateway_rest_api.this.id}.execute-api.${data.aws_region.current.region}.${data.aws_partition.current.dns_suffix}/${var.stage_name}"
 }
 
@@ -123,6 +125,29 @@ resource "aws_api_gateway_integration_response" "purchase" {
   depends_on = [aws_api_gateway_integration.purchase]
 }
 
+# --- /events/{eventId}/queue ---------------------------------------------------------------
+# The other buyer entry point (D6). It needs a resource of its own only so that stage method
+# settings can throttle queue join apart from everything else under /{proxy+}. GET (the
+# position poll, same path) is declared beside it: a request that matches a resource but not
+# one of its methods is refused there, not passed on to /{proxy+}. Integrations: session.
+
+resource "aws_api_gateway_resource" "queue" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.event.id
+  path_part   = "queue"
+}
+
+resource "aws_api_gateway_method" "queue" {
+  for_each = toset(local.queue_methods)
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = aws_api_gateway_resource.queue.id
+  http_method   = each.key
+  authorization = "NONE" # the JWT is checked by waiting-room (security-starter), as on /{proxy+}
+
+  request_parameters = { "method.request.path.eventId" = true }
+}
+
 # --- /{proxy+} -----------------------------------------------------------------------------
 # The method lives here; its VPC_LINK integration to the internal ALB is the session stack's.
 
@@ -159,7 +184,9 @@ locals {
     aws_api_gateway_resource.event,
     aws_api_gateway_resource.purchase,
     aws_api_gateway_resource.proxy,
+    aws_api_gateway_resource.queue,
     aws_api_gateway_method.purchase,
+    aws_api_gateway_method.queue,
     aws_api_gateway_method.proxy,
     aws_api_gateway_integration.purchase,
     aws_api_gateway_method_response.purchase,

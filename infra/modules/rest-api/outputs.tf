@@ -37,3 +37,16 @@ output "access_log_group_arn" {
   description = "Access log group ARN for the session stage."
   value       = aws_cloudwatch_log_group.access.arn
 }
+
+output "queue_resource_id" {
+  description = "The /events/{eventId}/queue resource, which the session stack's queue integrations attach to."
+  value       = aws_api_gateway_resource.queue.id
+}
+
+output "buyer_entry_paths" {
+  description = "Resource paths of the buyer entry points (queue join, purchase): what the WAF buyer rules and method throttling target (D6)."
+  value = {
+    queue    = aws_api_gateway_resource.queue.path
+    purchase = aws_api_gateway_resource.purchase.path
+  }
+}

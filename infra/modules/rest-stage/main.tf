@@ -33,13 +33,37 @@ resource "aws_api_gateway_integration" "proxy" {
   timeout_milliseconds = 29000
 }
 
+# Queue join and the position poll (D6): the same private integration, on the resource that
+# exists so queue join can be throttled on its own.
+resource "aws_api_gateway_integration" "queue" {
+  for_each = toset(var.queue_http_methods)
+
+  rest_api_id = var.rest_api_id
+  resource_id = var.queue_resource_id
+  http_method = each.key
+
+  type                    = "HTTP_PROXY"
+  integration_http_method = each.key
+  connection_type         = "VPC_LINK"
+  connection_id           = aws_apigatewayv2_vpc_link.this.id
+  integration_target      = var.alb_arn
+  # The resource path is the service path; {eventId} is filled from the mapping below.
+  uri = "http://${var.alb_dns_name}${var.queue_path}"
+
+  request_parameters = {
+    "integration.request.path.eventId" = "method.request.path.eventId"
+  }
+
+  timeout_milliseconds = 29000
+}
+
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = var.rest_api_id
 
   # A deployment is a snapshot: without a trigger, a changed method or integration is never
   # served (retro §3). Foundation's side arrives as its published definition_hash.
   triggers = {
-    redeployment = sha1(jsonencode([var.definition_hash, aws_api_gateway_integration.proxy]))
+    redeployment = sha1(jsonencode([var.definition_hash, aws_api_gateway_integration.proxy, aws_api_gateway_integration.queue]))
   }
 
   lifecycle {
@@ -72,5 +96,28 @@ resource "aws_api_gateway_stage" "this" {
       wafStatus          = "$context.waf.status"
       error              = "$context.error.message"
     })
+  }
+}
+
+# The free backstop (D6): WAF decides *who*, throttling bounds *how much*. Only the two buyer
+# entry points; everything else, the saga's calls included, keeps the account default.
+resource "aws_api_gateway_method_settings" "entry" {
+  for_each = local.entry_paths
+
+  rest_api_id = var.rest_api_id
+  stage_name  = aws_api_gateway_stage.this.stage_name
+  # "events/{eventId}/purchase/POST": the resource path without its leading slash, then the method.
+  method_path = "${trimprefix(each.value, "/")}/POST"
+
+  settings {
+    throttling_rate_limit  = var.throttle_rate[each.key]
+    throttling_burst_limit = var.throttle_burst[each.key]
+  }
+}
+
+locals {
+  entry_paths = {
+    queue    = var.queue_path
+    purchase = var.purchase_path
   }
 }

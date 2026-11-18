@@ -57,3 +57,62 @@ variable "alb_dns_name" {
   description = "The internal ALB's DNS name, the host in the integration URI."
   type        = string
 }
+
+variable "queue_resource_id" {
+  description = "Foundation's /events/{eventId}/queue resource (queue join and the position poll)."
+  type        = string
+}
+
+variable "queue_http_methods" {
+  description = "The methods foundation declares on the queue resource; each gets the private integration."
+  type        = list(string)
+  default     = ["GET", "POST"]
+}
+
+variable "queue_path" {
+  description = "Resource path of queue join, /events/{eventId}/queue, as foundation publishes it."
+  type        = string
+
+  validation {
+    condition     = strcontains(var.queue_path, "{eventId}") && startswith(var.queue_path, "/")
+    error_message = "The queue path is an absolute resource path carrying {eventId}."
+  }
+}
+
+variable "purchase_path" {
+  description = "Resource path of purchase, /events/{eventId}/purchase, as foundation publishes it."
+  type        = string
+
+  validation {
+    condition     = startswith(var.purchase_path, "/")
+    error_message = "The purchase path is an absolute resource path."
+  }
+}
+
+variable "throttle_rate" {
+  description = "Steady requests per second per buyer entry point, stage-wide (D6). Keys: queue, purchase."
+  type        = map(number)
+  default = {
+    queue    = 500
+    purchase = 100
+  }
+
+  validation {
+    condition     = length(setsubtract(["queue", "purchase"], keys(var.throttle_rate))) == 0
+    error_message = "throttle_rate needs a value for queue and for purchase."
+  }
+}
+
+variable "throttle_burst" {
+  description = "Burst per buyer entry point (D6). Keys: queue, purchase."
+  type        = map(number)
+  default = {
+    queue    = 1000
+    purchase = 200
+  }
+
+  validation {
+    condition     = length(setsubtract(["queue", "purchase"], keys(var.throttle_burst))) == 0
+    error_message = "throttle_burst needs a value for queue and for purchase."
+  }
+}

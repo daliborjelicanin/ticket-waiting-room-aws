@@ -39,6 +39,9 @@ locals {
       "apigw/rest/root_resource_id"    = module.rest_api.root_resource_id
       "apigw/rest/proxy_resource_id"   = module.rest_api.proxy_resource_id
       "apigw/rest/proxy_http_method"   = module.rest_api.proxy_http_method
+      "apigw/rest/queue_resource_id"   = module.rest_api.queue_resource_id
+      "apigw/rest/queue_path"          = module.rest_api.buyer_entry_paths["queue"]
+      "apigw/rest/purchase_path"       = module.rest_api.buyer_entry_paths["purchase"]
       "apigw/rest/execution_arn"       = module.rest_api.execution_arn
       "apigw/rest/invoke_url"          = module.rest_api.invoke_url
       "apigw/rest/definition_hash"     = module.rest_api.definition_hash

@@ -14,7 +14,7 @@ The public edge (D5): a REGIONAL REST API with a Cognito authorizer, `POST /even
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.73 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.73.0 |
 
 ## Modules
 
@@ -29,11 +29,13 @@ No modules.
 | [aws_api_gateway_integration_response.purchase](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_integration_response) | resource |
 | [aws_api_gateway_method.proxy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
 | [aws_api_gateway_method.purchase](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
+| [aws_api_gateway_method.queue](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method) | resource |
 | [aws_api_gateway_method_response.purchase](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_method_response) | resource |
 | [aws_api_gateway_resource.event](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
 | [aws_api_gateway_resource.events](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
 | [aws_api_gateway_resource.proxy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
 | [aws_api_gateway_resource.purchase](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
+| [aws_api_gateway_resource.queue](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_resource) | resource |
 | [aws_api_gateway_rest_api.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_rest_api) | resource |
 | [aws_cloudwatch_log_group.access](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_partition.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/partition) | data source |
@@ -56,11 +58,13 @@ No modules.
 | Name | Description |
 |------|-------------|
 | <a name="output_access_log_group_arn"></a> [access\_log\_group\_arn](#output\_access\_log\_group\_arn) | Access log group ARN for the session stage. |
+| <a name="output_buyer_entry_paths"></a> [buyer\_entry\_paths](#output\_buyer\_entry\_paths) | Resource paths of the buyer entry points (queue join, purchase): what the WAF buyer rules and method throttling target (D6). |
 | <a name="output_definition_hash"></a> [definition\_hash](#output\_definition\_hash) | Hash of everything here a deployment snapshots; part of the session deployment's triggers. |
 | <a name="output_execution_arn"></a> [execution\_arn](#output\_execution\_arn) | Execution ARN (for WAF and permissions in the session stack). |
 | <a name="output_invoke_url"></a> [invoke\_url](#output\_invoke\_url) | https://<rest-api-id>.execute-api.<region>.amazonaws.com/<stage>: TICKET\_VERIFY\_BASE\_URL and the saga's services base URL. |
 | <a name="output_proxy_http_method"></a> [proxy\_http\_method](#output\_proxy\_http\_method) | The /{proxy+} method (ANY). |
 | <a name="output_proxy_resource_id"></a> [proxy\_resource\_id](#output\_proxy\_resource\_id) | The /{proxy+} resource, which the session stack's VPC\_LINK integration attaches to. |
+| <a name="output_queue_resource_id"></a> [queue\_resource\_id](#output\_queue\_resource\_id) | The /events/{eventId}/queue resource, which the session stack's queue integrations attach to. |
 | <a name="output_rest_api_id"></a> [rest\_api\_id](#output\_rest\_api\_id) | REST API id. |
 | <a name="output_root_resource_id"></a> [root\_resource\_id](#output\_root\_resource\_id) | Root resource id. |
 <!-- END_TF_DOCS -->

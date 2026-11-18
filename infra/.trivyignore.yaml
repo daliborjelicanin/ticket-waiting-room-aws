@@ -72,7 +72,8 @@ misconfigurations:
   - id: AWS-0004
     paths: ["modules/rest-api/main.tf"]
     statement: >-
-      D5: ANY /{proxy+} carries no API Gateway authorizer because every service verifies the
+      D5: ANY /{proxy+} and GET/POST /events/{eventId}/queue (a resource only so queue join can
+      be throttled, D6) carry no API Gateway authorizer because every service verifies the
       Cognito JWT itself (security-starter: signature, issuer, expiry, token_use = access) on
       every request, the saga's included. The edge's own check is on POST /purchase only.
 
