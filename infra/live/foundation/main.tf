@@ -42,6 +42,7 @@ locals {
   }
 
   collector_config_parameter = "/twr/${var.env}/otel-collector-config"
+  collector_image_path       = "aws-observability/aws-otel-collector" # on public.ecr.aws
   saga_state_machine_name    = "${local.name_prefix}-checkout-saga"
   saga_state_machine_arn     = "arn:${data.aws_partition.current.partition}:states:${data.aws_region.current.region}:${var.account_id}:stateMachine:${local.saga_state_machine_name}"
   waf_acl_name               = "${local.name_prefix}-edge" # the session stack's web ACL (D6)
@@ -179,6 +180,8 @@ module "ecr" {
     "qr-generation-lambda",
     "queue-socket-lambda",
   ]
+  # The ECS collector sidecar, through the registry's cache: its layers then skip the NAT.
+  public_mirrors = [local.collector_image_path]
 }
 
 # --- messaging (D11, retro §3) --------------------------------------------------------------
@@ -243,12 +246,13 @@ module "iam" {
   permissions_boundary_arn = data.aws_iam_policy.boundary.arn
   kms_key_arn              = module.kms.key_arn
 
-  seat_table_arn        = module.seat_table.arn
-  connections_table_arn = module.connections_table.arn
-  queue_arns            = module.messaging.queue_arns
-  topic_arns            = module.messaging.topic_arns
-  qr_bucket_arn         = module.qr_bucket.arn
-  repository_arns       = module.ecr.repository_arns
+  seat_table_arn           = module.seat_table.arn
+  connections_table_arn    = module.connections_table.arn
+  queue_arns               = module.messaging.queue_arns
+  topic_arns               = module.messaging.topic_arns
+  qr_bucket_arn            = module.qr_bucket.arn
+  repository_arns          = module.ecr.repository_arns
+  collector_repository_arn = module.ecr.mirror_arns[local.collector_image_path]
 
   log_groups                 = local.log_groups
   lambda_function_names      = local.lambda_function_names

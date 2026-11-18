@@ -43,6 +43,11 @@ variable "repository_arns" {
   type        = map(string)
 }
 
+variable "collector_repository_arn" {
+  description = "The collector image's pull-through cache repository (modules/ecr mirror_arns), pulled by every collector-carrying execution role."
+  type        = string
+}
+
 variable "log_groups" {
   description = "Log group names the roles write to; the modules that create the groups take the same names."
   type = object({

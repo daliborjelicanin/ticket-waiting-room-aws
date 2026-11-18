@@ -17,6 +17,9 @@ dependencies {
     // `api`, because this is what a starter is for: adding this module IS adding the
     // resource server. A service must not have to name spring-security itself to use it.
     api(libs.spring.boot.starter.oauth2.resource.server)
+    // The entry point and the metadata refusal are servlet code. The services bring the
+    // container (Tomcat, through their web starter); the starter only compiles against it.
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.spring.boot.starter.test)

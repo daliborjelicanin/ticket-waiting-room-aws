@@ -19,3 +19,9 @@ variable "force_delete" {
   type        = bool
   default     = false
 }
+
+variable "public_mirrors" {
+  description = "public.ecr.aws repositories pulled through this registry's cache (e.g. aws-observability/aws-otel-collector), so their layers skip the NAT."
+  type        = list(string)
+  default     = []
+}

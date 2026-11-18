@@ -23,7 +23,10 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.SupplierJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.preauth.AbstractPreAuthenticatedProcessingFilter;
 import org.springframework.util.StringUtils;
+
+import java.util.Objects;
 
 /**
  * Makes the service an OAuth2 resource server for the Cognito user pool.
@@ -72,7 +75,12 @@ public class TicketingSecurityAutoConfiguration {
                     rules.orderedStream().forEach(rule -> rule.configure(registry));
                     registry.anyRequest().authenticated();
                 })
-                .oauth2ResourceServer(server -> server.jwt(Customizer.withDefaults()))
+                // Spring's challenge minus resource_metadata, and no metadata endpoint: both
+                // would hand callers the internal ALB's DNS name (see the two classes).
+                .oauth2ResourceServer(server -> server
+                        .jwt(Customizer.withDefaults())
+                        .authenticationEntryPoint(new BearerChallengeEntryPoint()))
+                .addFilterBefore(new ProtectedResourceMetadataRefusal(), AbstractPreAuthenticatedProcessingFilter.class)
                 .build();
     }
 
@@ -108,6 +116,7 @@ public class TicketingSecurityAutoConfiguration {
     @Bean
     @ConditionalOnBooleanProperty(name = "ticketing.security.warm-up", matchIfMissing = true)
     JwtDecoderWarmUp jwtDecoderWarmUp(JwtDecoder decoder, OAuth2ResourceServerProperties properties) {
-        return new JwtDecoderWarmUp(decoder, properties.getJwt().getIssuerUri());
+        // Set: the decoder above, which this bean needs, already refused to start without it.
+        return new JwtDecoderWarmUp(decoder, Objects.requireNonNull(properties.getJwt().getIssuerUri()));
     }
 }

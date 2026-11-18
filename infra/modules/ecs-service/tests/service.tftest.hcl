@@ -23,6 +23,7 @@ variables {
   log_group_name             = "/twr/test/ecs/seat-inventory"
   region                     = "eu-central-1"
   collector_config_parameter = "/twr/test/otel-collector-config"
+  collector_image            = "repo.example/mirror-twr-test/aws-observability/aws-otel-collector:v0.50.0"
   environment                = { SEAT_INVENTORY_TABLE_NAME = "twr-test-seat-inventory" }
   load_balancer = {
     target_group_arn        = "arn:aws:elasticloadbalancing:eu-central-1:aws:targetgroup/twr-test-seat-inventory-tg/0000000000000000"
@@ -112,6 +113,7 @@ run "without_collector_no_sidecar_and_no_export" {
 
   variables {
     collector_config_parameter = null
+    collector_image            = null
   }
 
   assert {
@@ -264,4 +266,24 @@ run "container_definitions_read_back_unchanged" {
     )])
     error_message = "Every container spells out the empty lists and hostPort ECS adds, or the second plan is not clean."
   }
+}
+
+run "collector_without_image_refused" {
+  command = plan
+
+  variables {
+    collector_image = null
+  }
+
+  expect_failures = [var.collector_image]
+}
+
+run "collector_straight_from_public_ecr_refused" {
+  command = plan
+
+  variables {
+    collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0"
+  }
+
+  expect_failures = [var.collector_image]
 }

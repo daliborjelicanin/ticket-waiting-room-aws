@@ -200,6 +200,21 @@ data "aws_iam_policy_document" "execution" {
     resources = ["${local.log_group_arn["ecs/${each.key}"]}:*"]
   }
 
+  # The collector image comes through the registry's pull-through cache, so its layers skip
+  # the NAT (modules/ecr). Importing is what a first pull of a not-yet-cached tag does.
+  dynamic "statement" {
+    for_each = each.value.collector ? [1] : []
+
+    content {
+      sid = "PullCollectorThroughTheCache"
+      actions = [
+        "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchImportUpstreamImage",
+      ]
+      resources = [var.collector_repository_arn]
+    }
+  }
+
   dynamic "statement" {
     for_each = each.value.collector ? [1] : []
 

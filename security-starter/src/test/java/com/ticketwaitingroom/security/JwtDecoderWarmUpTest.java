@@ -2,6 +2,7 @@ package com.ticketwaitingroom.security;
 
 import com.nimbusds.jwt.SignedJWT;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.availability.AvailabilityChangeEvent;
@@ -68,13 +69,13 @@ class JwtDecoderWarmUpTest {
     @Test
     void theRunnerReturnsOnlyOnceTheDecoderIsWarm() throws InterruptedException {
         AtomicBoolean warmed = new AtomicBoolean();
-        JwtDecoder slow = token -> {
+        JwtDecoder slow = _ -> {
             sleep(Duration.ofMillis(300));
             warmed.set(true);
             throw new BadJwtException("no matching key");
         };
 
-        new JwtDecoderWarmUp(slow, ISSUER).run(null);
+        new JwtDecoderWarmUp(slow, ISSUER).run(new DefaultApplicationArguments());
 
         assertThat(warmed).isTrue();
     }
@@ -82,7 +83,7 @@ class JwtDecoderWarmUpTest {
     @Test
     void aHungIssuerHoldsReadinessOnlyForTheWait() throws InterruptedException {
         CountDownLatch never = new CountDownLatch(1);
-        JwtDecoder hung = token -> {
+        JwtDecoder hung = _ -> {
             try {
                 never.await();
             } catch (InterruptedException e) {
@@ -93,7 +94,7 @@ class JwtDecoderWarmUpTest {
 
         long started = System.nanoTime();
         try {
-            new JwtDecoderWarmUp(hung, ISSUER, Duration.ofMillis(200)).run(null);
+            new JwtDecoderWarmUp(hung, ISSUER, Duration.ofMillis(200)).run(new DefaultApplicationArguments());
             // Waited the bound, then let go: not the hung fetch's lifetime.
             assertThat(Duration.ofNanos(System.nanoTime() - started).toMillis()).isBetween(200L, 2_000L);
         } finally {
@@ -129,7 +130,7 @@ class JwtDecoderWarmUpTest {
 
         @Bean
         JwtDecoderWarmUp jwtDecoderWarmUp() {
-            JwtDecoder slow = token -> {
+            JwtDecoder slow = _ -> {
                 sleep(Duration.ofMillis(300));
                 WARMED.set(true);
                 throw new BadJwtException("no matching key");

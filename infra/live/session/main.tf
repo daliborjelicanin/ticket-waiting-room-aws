@@ -28,6 +28,7 @@ locals {
     "waf/log_bucket_arn",
     "dynamodb/seat_table_name",
     "cognito/issuer_uri",
+    "ecr/mirror/aws-observability/aws-otel-collector",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -79,6 +80,8 @@ locals {
   service_log_group          = { for s in keys(local.service_repository) : s => "/twr/${var.env}/ecs/${s}" }
   ecs_exec_log_group         = "/twr/${var.env}/ecs-exec"
   collector_config_parameter = "/twr/${var.env}/otel-collector-config"
+  # Through the registry's pull-through cache, so the layers skip the NAT (modules/ecr).
+  collector_image = "${local.foundation["ecr/mirror/aws-observability/aws-otel-collector"]}:v0.50.0"
 
   routes = {
     for s in var.services : s => {
@@ -214,6 +217,7 @@ module "service" {
   log_group_name             = local.service_log_group[each.key]
   region                     = var.region
   collector_config_parameter = local.collector_config_parameter
+  collector_image            = local.collector_image
 
   capacity      = var.capacity
   desired_count = var.desired_count

@@ -54,6 +54,7 @@ locals {
     },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
+    { for k, url in module.ecr.mirror_urls : "ecr/mirror/${k}" => url },
     { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },
     { for k, arn in module.messaging.queue_arns : "messaging/queue/${k}/arn" => arn },
     { for k, arn in module.messaging.topic_arns : "messaging/topic/${k}/arn" => arn },

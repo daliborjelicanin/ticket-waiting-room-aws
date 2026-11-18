@@ -1549,10 +1549,20 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
     - The collector: X-Ray traces, and EMF `http.server.requests` in `/twr/dev/metrics`.
   - **Second plan not clean at first.** ECS stores container definitions with empty lists and `hostPort` filled in, so every plan replaced the task definition. They are now written out, and a test guards them. Second plan: **No changes**.
   - **Found, open.**
-    - Spring Security 7's `WWW-Authenticate` carries `resource_metadata="http://<internal ALB DNS>/.well-known/oauth-protected-resource"`, built from the `Host` API Gateway sends, so every unauthenticated caller learns the internal ALB's name. To fix in `security-starter`.
+    - Spring Security 7's `WWW-Authenticate` carries `resource_metadata="http://<internal ALB DNS>/.well-known/oauth-protected-resource"`, built from the `Host` API Gateway sends, so every unauthenticated caller learns the internal ALB's name.
+      - *Fixed in code 2026-11-18, in `security-starter`.* `BearerChallengeEntryPoint` removes the parameter from Spring's own challenge. `ProtectedResourceMetadataRefusal` answers the anonymous `/.well-known/oauth-protected-resource` endpoint with 404; it would name the same host.
+      - Every service gets the fix with its next image. To check on the next session: a 401 through the stage is plain `Bearer`.
     - The 401 requests' traces are not joined to the edge's trace: only `security filterchain` spans arrive.
 - [ ] Saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5)
 - [ ] Verify: `k6/seat-race.js` through the edge → exactly one winner per seat; flow logs show DynamoDB and ECR layer traffic **not** via the NAT; WAF baseline sampled requests reviewed → block
+  - *Flow logs, 2026-11-18*, from the two seat-inventory applies (2664 records). Method: the NAT's own interface is the one with an address in a public subnet. Every source it received from was matched against `ip-ranges.json` and the S3 / DynamoDB prefix lists.
+    - **ECR layers skip the NAT.** 798 MB came from S3 to the app subnets through the gateway endpoint, about five task starts' worth of seat-inventory layers.
+    - **The collector image does not.** 262 MB reached the NAT from CloudFront addresses. That is the ADOT sidecar from `public.ecr.aws`, whose layers are served from CloudFront, where no gateway endpoint reaches. It recurs on every task start and every scale-out.
+      - *Fixed in code 2026-11-18, not yet applied.* An ECR pull-through cache rule for `public.ecr.aws` (`modules/ecr`, `public_mirrors`). Its repository, `mirror-twr-dev/aws-observability/aws-otel-collector`, is created by Terraform: immutable, scanned, with the lifecycle. So no role needs `ecr:CreateRepository`. The collector-carrying execution roles may pull from it and `ecr:BatchImportUpstreamImage` into it. `ecs-service` refuses a collector image straight from `public.ecr.aws`.
+      - The prefix is `mirror-<prefix>`, not `<prefix>-*`: `ci-images` may push to `<prefix>-*` (D14), and must not be able to plant a tag in the mirror before its first pull.
+      - To prove on the next session's flow logs: no CloudFront bytes through the NAT, except the one first import.
+    - The rest is about 1 MB of regional AWS APIs (ECR auth and manifests, logs, SSM, Cognito JWKS), the NAT's intended traffic (D3, D4).
+    - **DynamoDB: no traffic to judge.** Every request was a 401 before the table was touched. It is checked after the k6 run, which writes holds.
 - **Learn:** private integration, SG chains, why ECR pulls go via the S3 endpoint
 
 ### 3. Data + saga — ≈ $0.20/h

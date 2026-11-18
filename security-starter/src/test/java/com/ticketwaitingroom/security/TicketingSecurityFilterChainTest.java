@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -36,6 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class TicketingSecurityFilterChainTest {
 
     private static final String CUSTOMER = "b4c1e0a2-1111-4000-8000-000000000009";
+    private static final String INTERNAL_HOST = "internal-twr-test-alb.eu-central-1.elb.amazonaws.com";
 
     @Autowired
     private MockMvc mockMvc;
@@ -53,6 +56,25 @@ class TicketingSecurityFilterChainTest {
         mockMvc.perform(get("/me"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string("WWW-Authenticate", startsWith("Bearer")));
+    }
+
+    @Test
+    void theChallengeNeverNamesTheHostItWasSentTo() throws Exception {
+        // Behind API Gateway's private integration the Host is the internal ALB's DNS name.
+        // Spring Security 7 would echo it back as resource_metadata on every 401 (2026-11-18).
+        mockMvc.perform(get("https://" + INTERNAL_HOST + "/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", "Bearer"));
+    }
+
+    @Test
+    void theProtectedResourceMetadataEndpointDoesNotExist() throws Exception {
+        // Spring Security's own would answer anonymously with the Host as "resource".
+        mockMvc.perform(get("https://" + INTERNAL_HOST + "/.well-known/oauth-protected-resource"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().string(not(containsString(INTERNAL_HOST))));
+        mockMvc.perform(get("https://" + INTERNAL_HOST + "/.well-known/oauth-protected-resource/me"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

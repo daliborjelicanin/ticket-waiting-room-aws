@@ -95,6 +95,26 @@ the service boot with the pool unreachable (an unreachable pool is logged, and t
 real request pays as before). `ticketing.security.warm-up=false` disables it; the root
 build does so for every test JVM.
 
+## What a 401 does not say
+
+Behind API Gateway's private integration every request arrives with the **internal ALB's DNS
+name** as its `Host`. Spring Security 7 builds two things from that host, and this module
+removes both (found on the first live session, 2026-11-18).
+
+- **The challenge.** Spring adds `resource_metadata="http://<host>/.well-known/oauth-protected-resource"`
+  (RFC 9728) to every 401. That handed every unauthenticated caller on the internet the
+  internal load balancer's name. A resolver can change the value but not leave it out, so
+  `BearerChallengeEntryPoint` wraps Spring's own entry point and removes only that one
+  parameter from the header. The error code, description, scope and status (401, or 403
+  for `insufficient_scope`) stay Spring's.
+- **The metadata endpoint.** Spring installs an anonymous `GET /.well-known/oauth-protected-resource`
+  that cannot be switched off (the filter is final, its path fixed). It would answer with that
+  host as `resource`, and claim certificate-bound tokens, which Cognito's are not.
+  `ProtectedResourceMetadataRefusal` answers the path with a plain 404 before Spring's filter
+  runs. It sets the status rather than calling `sendError`, so the error dispatch cannot run
+  the chain again and turn the 404 into the anonymous 401. The edge routes no `/.well-known`
+  path to any service anyway; this closes it from inside the VPC too.
+
 ## Conditions
 
 Both beans are `@ConditionalOnMissingBean`, so a service (or a test) that defines its own
@@ -123,7 +143,11 @@ one declared ops-only, driven through the real filters: anonymous → 401 with a
 challenge; any valid token → the open endpoint, as its own `sub`; a customer's token on the
 ops endpoint → 403; the ops scope → 200. `GET /actuator/health` → 200
 anonymously, `POST` to it → 401, and the old probe path `GET /` still 401 rather than 404
-or 500. `TicketingSecurityAutoConfigurationTest` — the back-off and refuse-to-start
+or 500. A request sent with the internal ALB's host gets exactly `WWW-Authenticate: Bearer`, and
+the metadata path answers 404 without the host. Both fail with the two classes taken out.
+`BearerChallengeEntryPointTest` — an invalid token keeps its RFC 6750 error, description and
+URI and loses only `resource_metadata`; `insufficient_scope` keeps its 403 and its scope.
+`TicketingSecurityAutoConfigurationTest` — the back-off and refuse-to-start
 conditions, and the warm-up present by default and absent when switched off.
 `JwtDecoderWarmUpTest` — the probe token parses as RS256 for the issuer with `kid`
 `warm-up` and an all-zero signature; a rejected probe is not an error; an unreachable issuer

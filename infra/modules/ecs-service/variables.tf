@@ -100,13 +100,23 @@ variable "collector_config_parameter" {
 }
 
 variable "collector_image" {
-  description = "ADOT collector image. A version tag, never latest."
+  description = "ADOT collector image, through the registry's pull-through cache (modules/ecr mirror_urls) so its layers skip the NAT. A version tag, never latest. Required with collector_config_parameter."
   type        = string
-  default     = "public.ecr.aws/aws-observability/aws-otel-collector:v0.50.0"
+  default     = null
 
   validation {
-    condition     = !endswith(var.collector_image, ":latest") && can(regex(":[^/]+$", var.collector_image))
+    condition     = var.collector_config_parameter == null || var.collector_image != null
+    error_message = "A collector needs its image: the pull-through cache URL with a version tag."
+  }
+
+  validation {
+    condition     = var.collector_image == null || (!endswith(coalesce(var.collector_image, "x"), ":latest") && can(regex(":[^/]+$", coalesce(var.collector_image, "x"))))
     error_message = "Pin the collector image to a version tag, never latest."
+  }
+
+  validation {
+    condition     = var.collector_image == null || !startswith(coalesce(var.collector_image, "x"), "public.ecr.aws/")
+    error_message = "Not from public.ecr.aws directly: its layers come through the NAT. Use the pull-through cache (modules/ecr)."
   }
 }
 

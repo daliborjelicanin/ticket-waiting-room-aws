@@ -42,3 +42,43 @@ run "lifecycle_keeps_the_last_three" {
     error_message = "Untagged images expire after a day; the last 3 images are kept, \"any\" as the last rule (D24)."
   }
 }
+
+run "public_images_cached_outside_the_ci_push_scope" {
+  command = plan
+
+  variables {
+    public_mirrors = ["aws-observability/aws-otel-collector"]
+  }
+
+  assert {
+    condition = (
+      aws_ecr_pull_through_cache_rule.public[0].upstream_registry_url == "public.ecr.aws"
+      && aws_ecr_pull_through_cache_rule.public[0].ecr_repository_prefix == "mirror-twr-test"
+    )
+    error_message = "public.ecr.aws is cached under mirror-<prefix>."
+  }
+
+  assert {
+    condition = (
+      aws_ecr_repository.mirror["aws-observability/aws-otel-collector"].name == "mirror-twr-test/aws-observability/aws-otel-collector"
+      && !startswith(aws_ecr_repository.mirror["aws-observability/aws-otel-collector"].name, "twr-test-")
+    )
+    error_message = "Mirrors sit outside <prefix>-*, which ci-images may push to (D14)."
+  }
+
+  assert {
+    condition = alltrue([for r in values(aws_ecr_repository.mirror) : (
+      r.image_tag_mutability == "IMMUTABLE" && r.image_scanning_configuration[0].scan_on_push
+    )])
+    error_message = "A cached tag is immutable and scanned, like our own images."
+  }
+}
+
+run "no_mirrors_no_cache_rule" {
+  command = plan
+
+  assert {
+    condition     = length(aws_ecr_pull_through_cache_rule.public) == 0 && length(aws_ecr_repository.mirror) == 0
+    error_message = "Without public_mirrors, no registry-wide cache rule."
+  }
+}

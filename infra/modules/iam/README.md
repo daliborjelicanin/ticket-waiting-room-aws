@@ -55,6 +55,7 @@ No modules.
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_collector_config_parameter"></a> [collector\_config\_parameter](#input\_collector\_config\_parameter) | SSM parameter name holding the collector config, read by the execution roles. | `string` | n/a | yes |
+| <a name="input_collector_repository_arn"></a> [collector\_repository\_arn](#input\_collector\_repository\_arn) | The collector image's pull-through cache repository (modules/ecr mirror\_arns), pulled by every collector-carrying execution role. | `string` | n/a | yes |
 | <a name="input_connections_table_arn"></a> [connections\_table\_arn](#input\_connections\_table\_arn) | WebSocket connection registry table ARN. | `string` | n/a | yes |
 | <a name="input_db"></a> [db](#input\_db) | Names the session stack gives the database pieces, so their secrets can be granted before they exist. | <pre>object({<br/>    instance_identifier  = string<br/>    service_secret_names = map(string) # checkout, ticketing<br/>  })</pre> | n/a | yes |
 | <a name="input_kms_key_arn"></a> [kms\_key\_arn](#input\_kms\_key\_arn) | The CMK; granted per role with kms:ViaService (D11). | `string` | n/a | yes |

@@ -1,6 +1,5 @@
 package com.ticketwaitingroom.security;
 
-import org.jspecify.annotations.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -66,7 +65,7 @@ final class JwtDecoderWarmUp implements ApplicationRunner {
     }
 
     @Override
-    public void run(@NonNull ApplicationArguments args) throws InterruptedException {
+    public void run(ApplicationArguments args) throws InterruptedException {
         Thread worker = Thread.ofVirtual().name("jwt-warm-up").start(this::warmUp);
         if (!worker.join(wait)) {
             // Left running: it finishes the fetch in the background, so the first real token
