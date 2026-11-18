@@ -26,6 +26,13 @@ COPY --from=extract --chown=app:app /build/extracted/spring-boot-loader/ ./
 COPY --from=extract --chown=app:app /build/extracted/snapshot-dependencies/ ./
 COPY --from=extract --chown=app:app /build/extracted/application/ ./
 
+# The task's root filesystem is read-only (phase2-plan D7) and /tmp is a Fargate
+# task-storage mount for Tomcat's work directory and the JVM. Fargate creates such a
+# mount root-owned 0755 unless the image declares the path a VOLUME, in which case it
+# starts from the image's /tmp, sticky and world-writable. Without this line `app`
+# cannot write there and Tomcat refuses to start.
+VOLUME ["/tmp"]
+
 USER app
 EXPOSE 8080
 

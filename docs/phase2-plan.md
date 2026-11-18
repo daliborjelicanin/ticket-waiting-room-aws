@@ -684,7 +684,7 @@ record what that review changed and why, and stay as the reasoning.
   - *Found 2026-11-18, first apply.* Fargate creates a task-storage mount root-owned `0755`,
     so the non-root `app` user could not write `/tmp` and Tomcat did not start. The image
     now declares `VOLUME ["/tmp"]`, and Fargate seeds the mount from the image's `/tmp`
-    (`1777`). Every service Dockerfile needs the same line.
+    (`1777`). All five service Dockerfiles carry the line: seat-inventory's on the first apply, the other four the same day, each image built locally and read back (`/tmp` a volume, `1777`, user `app`).
 - *Review: logging.* Keep the `awslogs` driver, with `mode = "non-blocking"` and a
   `max-buffer-size` pinned explicitly. In blocking mode, a CloudWatch hiccup stalls the
   application's own threads, which during a door-open looks like a concurrency bug that is not
