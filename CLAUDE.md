@@ -138,6 +138,10 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
 - `./scripts/teardown-sweep.sh` (`ALL_REGIONS=1` for every region) — read-only account
   sweep after a session; exits 1 if anything that bills by the hour is still up, and lists
   project resources the tag search cannot see. See `docs/runbook-teardown-sweep.md`
+- `infra/scripts/nat-traffic.sh <YYYY-MM-DD>` (after `source infra/scripts/tf-env.sh`) —
+  read-only: what went through the session NAT that day, by the AWS service at the far end,
+  and what took the S3/DynamoDB gateway endpoints instead, from the flow logs (D3, D4); see
+  `docs/runbook-session-edge.md` §6
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a

@@ -3,7 +3,7 @@
 # that are torn down per session anyway; this only tidies the pool.
 #   load-test/scripts/delete-test-users.sh 50
 set -euo pipefail
-source ~/.ticket-waiting-room/cognito.env
+source "$(dirname "$0")/cognito-env.sh" # Phase 2 pool and clients, resolved at run time
 N=${1:?number of users}
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
 for i in $(seq 1 "$N"); do

@@ -1563,6 +1563,11 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
       - To prove on the next session's flow logs: no CloudFront bytes through the NAT, except the one first import.
     - The rest is about 1 MB of regional AWS APIs (ECR auth and manifests, logs, SSM, Cognito JWKS), the NAT's intended traffic (D3, D4).
     - **DynamoDB: no traffic to judge.** Every request was a 401 before the table was touched. It is checked after the k6 run, which writes holds.
+  - *Prepared 2026-11-18 for the seat-race session* (`docs/runbook-session-edge.md` §6).
+    - `load-test` reads the Phase 2 pool and clients from SSM, and the `ops` secret from Cognito at run time (`scripts/cognito-env.sh`). The operator token was minted and checked: `token_use` access, scope `ticketing/ops`.
+    - `scripts/seat-holds.sh` is the table-side check of the race.
+    - `infra/scripts/nat-traffic.sh` makes the flow-log check repeatable. It reproduced the numbers above.
+    - The seat paths are not buyer entry, so the race needs no `loadtest_allow_cidr`.
 - **Learn:** private integration, SG chains, why ECR pulls go via the S3 endpoint
 
 ### 3. Data + saga — ≈ $0.20/h

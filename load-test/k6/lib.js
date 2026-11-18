@@ -8,11 +8,12 @@ import { randomBytes } from 'k6/crypto';
 // Passed in with -e API=..., never written here: it is a live, billable endpoint.
 export const API = __ENV.API;
 if (!API) {
-    throw new Error('set API to the ticket-edge invoke URL: k6 run -e API=https://... ');
+    throw new Error('set API to the REST stage invoke URL: k6 run -e API=$(terraform -chdir=infra/live/session output -raw invoke_url) ...');
 }
 
-// Bot Control on POST /purchase classifies k6's own User-Agent as an HTTP library and
-// blocks it (runbook-waf.md). A browser UA is what a real buyer's browser sends anyway.
+// Bot Control on the buyer entry points (POST queue join and POST purchase, D6) classifies
+// k6's own User-Agent as an HTTP library and blocks it. A browser UA is what a real buyer's
+// browser sends anyway; the purchase race still needs loadtest_allow_cidr for the rate rules.
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 
 export const tokens = JSON.parse(open('../.tokens.json'));

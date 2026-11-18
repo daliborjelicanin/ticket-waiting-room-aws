@@ -4,13 +4,17 @@
 # load-test/.tokens.json, which is gitignored. Cognito tokens live one hour: mint right
 # before the run, and re-mint rather than reuse across sessions.
 #
-#   load-test/scripts/mint-tokens.sh 50
+#   load-test/scripts/mint-tokens.sh 50     # purchase race: operator + 50 customers
+#   load-test/scripts/mint-tokens.sh 0      # seat race: the operator alone
 #
 # LOAD_TEST_PASSWORD must be the one create-test-users.sh was run with.
 set -euo pipefail
-source ~/.ticket-waiting-room/cognito.env
+source "$(dirname "$0")/cognito-env.sh" # Phase 2 pool and clients, resolved at run time
 N=${1:?number of users}
-PASSWORD=${LOAD_TEST_PASSWORD:?set LOAD_TEST_PASSWORD -- password of the lt-N test users, never a committed default}
+# 0 customers mints the operator token alone, which is all the seat race needs.
+if [ "$N" -gt 0 ]; then
+  PASSWORD=${LOAD_TEST_PASSWORD:?set LOAD_TEST_PASSWORD -- password of the lt-N test users, never a committed default}
+fi
 REGION=${AWS_DEFAULT_REGION:-eu-central-1}
 OUT="$(dirname "$0")/../.tokens.json"
 

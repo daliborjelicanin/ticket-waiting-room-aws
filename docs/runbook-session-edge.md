@@ -104,3 +104,87 @@ terraform -chdir=infra/live/session destroy -var enable_alb=true -var enable_waf
 ```
 
 The WAF logs stay in foundation's bucket for 7 days.
+
+## 6. The seat race through the edge (slice 2 verify)
+
+One session, about 45 minutes at ≈ $0.13/h, proves four things together:
+- **The race:** `k6/seat-race.js` from the laptop through the stage, the VPC link and the ALB to seat-inventory, with exactly one winner per seat.
+- **The flow logs:** DynamoDB and the image layers take the gateway endpoints, not the NAT.
+- **The collector:** its image comes through the pull-through cache.
+- **The 401:** no longer names the internal ALB.
+
+No `loadtest_allow_cidr`: the seat paths are not buyer entry, so no buyer rule and no method
+throttle applies to them (D6).
+
+**6.0 Image** (before the session; the `security-starter` fix ships with it). arm64 on an x86
+laptop needs QEMU registered once per boot, in your own terminal (it runs privileged):
+`docker run --privileged --rm tonistiigi/binfmt:qemu-v9.2.2 --install arm64`. Then:
+
+```bash
+./gradlew :seat-inventory-service:bootJar
+TAG=$(git rev-parse --short HEAD)
+REPO=$(aws ssm get-parameter --name /twr/dev/foundation/ecr/seat-inventory-service --query Parameter.Value --output text)
+docker buildx build --platform linux/arm64 --load -t "$REPO:$TAG" seat-inventory-service
+aws ecr get-login-password | docker login --username AWS --password-stdin "${REPO%%/*}"
+docker push "$REPO:$TAG" && docker logout "${REPO%%/*}"
+DIGEST=$(aws ecr describe-images --repository-name twr-dev-seat-inventory-service --image-ids imageTag=$TAG \
+  --query 'imageDetails[0].imageDigest' --output text)
+aws ssm put-parameter --name /twr/dev/images/seat-inventory-service --type String --value "$DIGEST" --overwrite
+source infra/scripts/tf-env.sh             # re-resolve TF_VAR_image_digests
+```
+
+This is what `images.yml` will do from slice 4 (D15).
+
+**6.1 Apply** (≈ 6 min; the service waits for steady state):
+
+```bash
+terraform -chdir=infra/live/session apply \
+  -var enable_nat=true -var enable_alb=true -var enable_waf=true -var 'services=["seat-inventory"]'
+```
+
+**6.2 Before the race**
+
+```bash
+API=$(terraform -chdir=infra/live/session output -raw invoke_url)
+# The 401 names no host: exactly "Bearer", no resource_metadata.
+curl -s -D - -o /dev/null -X POST -A 'Mozilla/5.0' "$API/events/e1/seats/A1/hold" | grep -i www-authenticate
+# The collector came through the cache: v0.50.0 now sits in the mirror, imported by the task's role.
+aws ecr describe-images --repository-name mirror-twr-dev/aws-observability/aws-otel-collector \
+  --query 'imageDetails[].{tags:imageTags,pushed:imagePushedAt}'
+```
+
+**6.3 Race** (from the repository root):
+
+```bash
+alias k6='docker run --rm -i --user "$(id -u):$(id -g)" -v "$PWD/load-test:/work" -w /work grafana/k6:0.55.0'
+load-test/scripts/mint-tokens.sh 0                       # the operator token alone
+EVENT=race-$(date +%s)
+k6 run -e API=$API -e EVENT=$EVENT -e VUS=200 -e SEATS=10 k6/seat-race.js
+load-test/scripts/seat-holds.sh $EVENT 10                 # within the 5-minute hold
+```
+
+Expected: k6 `won` 10, `lost` 190, `unexpected` 0, and `seat-holds.sh` 10 HELD, each with
+its holdId. Record p95/p99 of won and lost, and the task count (target tracking at 600 requests per
+target per minute is not expected to fire on 200 requests).
+
+**6.4 Flow logs**: about 10 minutes after the race, while the session is still up or after
+the destroy:
+
+```bash
+infra/scripts/nat-traffic.sh $(date -u +%F)
+```
+
+Expected, under *through the gateway endpoints*: DynamoDB above zero both ways (the holds)
+and S3 (the image layers). Under *through the NAT*: no S3 and no DynamoDB rows at all, and
+CLOUDFRONT only for the collector's one first import (≈ 50 MB), where the last session had 262 MB.
+The report covers the whole day, earlier sessions included.
+
+**6.5 Record, destroy, sweep**: the numbers into the slice 2 verify line of
+`docs/phase2-plan.md`; then
+
+```bash
+terraform -chdir=infra/live/session destroy \
+  -var enable_nat=true -var enable_alb=true -var enable_waf=true -var 'services=["seat-inventory"]'
+./scripts/teardown-sweep.sh
+rm -f load-test/.tokens.json
+```
