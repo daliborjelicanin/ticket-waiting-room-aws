@@ -57,9 +57,18 @@ aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$task" || fail "task $i
 read -r code reason < <(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task" \
   --query 'tasks[0].[containers[?name==`migrate`]|[0].exitCode, stoppedReason]' --output text)
 
-echo "--- log tail ($LOG_GROUP, stream $DB/migrate/$id)"
-aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$DB/migrate/$id" --limit 30 \
-  --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' | mask || echo "(no log stream: the container never started)"
+# The migration's own lines (migration-starter's loggers) and anything WARN or worse; on a
+# failure, the last 40 lines in full as well, where Boot says why startup failed. A plain tail
+# would be Hibernate's startup chatter: the migration's lines come before it.
+log=$(aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$DB/migrate/$id" --start-from-head \
+  --limit 500 --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' | mask || true)
+echo "--- log ($LOG_GROUP, stream $DB/migrate/$id)"
+if [[ -z "$log" ]]; then
+  echo "(no log stream: the container never started)"
+else
+  grep -E 'c\.t\.m\.|c\.t\.migration\.|ticketwaitingroom\.migration| (WARN|ERROR) ' <<<"$log" || true
+  [[ "$code" == 0 ]] || { echo "--- last 40 lines"; tail -40 <<<"$log"; }
+fi
 echo "---"
 
 if [[ "$code" =~ ^[0-9]+$ ]]; then

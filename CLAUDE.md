@@ -155,6 +155,10 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   (the service image's `migrate` profile, D10) on on-demand Fargate, waits for it, prints the
   log tail with the RDS host and account masked, and exits with the container's code (2 if it
   never ran). Run before the service is updated
+- `infra/scripts/db-probe.sh <checkout|ticketing>` (same shell and session) — logs in on the
+  live instance as that service's role, from its own secret, through a throwaway `psql` task,
+  and checks D9: DML on its own tables allowed; DDL, the Flyway history and the other
+  database refused. Deletes its task definition on exit. See `docs/runbook-session-data.md`
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
