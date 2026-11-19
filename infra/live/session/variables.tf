@@ -139,6 +139,12 @@ variable "enable_db" {
   default     = false
 }
 
+variable "enable_saga" {
+  description = "The checkout saga: its EventBridge connection (Cognito client_credentials, ticketing/ops), and the state machine to come (D5, D13). The connection's secret is $0.40/month prorated; no hourly charge."
+  type        = bool
+  default     = false
+}
+
 variable "enable_cache" {
   description = "Valkey for the waiting room's queue (D8). ~$0.014/h."
   type        = bool

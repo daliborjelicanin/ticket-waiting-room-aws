@@ -791,6 +791,7 @@ transit.** *Settled 2026-11-11.*
   | SQS queues, SNS topic | CMK | `purchase-confirmed` carries the buyer's email |
   | Secrets Manager (per-service DB secrets, RDS master secret) | CMK | credentials; the key policy becomes a second gate on who can decrypt them |
   | ElastiCache Valkey (the waiting-room queue) | CMK | *added 2026-11-19, writing `modules/cache`:* the queue holds queue tokens, bearer values (D8), so the rule puts it here. It covers the node's disk and swap; snapshots are off |
+  | EventBridge connection secret (the saga's ops client secret, `events!connection/…`) | AWS-owned | *added 2026-11-19, writing `modules/saga`:* the same client secret is in state (D13), so a CMK on this copy would gate one copy of a value whose other copy is not behind the key. The controls are who can read state and who can call `events:RetrieveConnectionCredentials` (the saga role only, scoped to `connection/twr-<env>-*`). A CMK would also need the key tag `EventBridgeApiDestinations` and a key-policy statement for no gain |
   | DynamoDB seat and connection tables | AWS-owned | no personal data beyond a pseudonymous `sub`; a CMK would put a key-state dependency on the hottest conditional-write path for no confidentiality gain |
   | CloudWatch Logs | AWS-owned | instead, the rule is **no personal data in logs**: emails are never logged, which is an application rule that is already true and stays true |
   | Terraform state bucket | SSE-S3 + bucket policy | access, not the key, is the control. Only `tf-plan`, the two `tf-apply-*` roles and the owner's SSO role can read it; a second key would cost $1/month to restate that policy |
@@ -1615,7 +1616,14 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
   - the saga's `GET /admissions/{customerRef}` answered `admitted: true` for buyer 1 and `false` (`WAITING`) for buyer 3.
 - **Read back.** The replication group shows transit encryption `required` and at rest on. The admissions reached SQS: the queue-notifier Lambda was invoked once for the batch. No error in waiting-room's log.
 - **Found.** JDK 26 warns that Netty (Lettuce's transport) calls a restricted method (`System::loadLibrary`), which a future release will block unless native access is enabled. The fix is `--enable-native-access=ALL-UNNAMED` in waiting-room's `ENTRYPOINT`. Left for the next image.*
-- [ ] EventBridge connection + state machine from `templatefile()`
+- [ ] EventBridge connection + state machine from `templatefile()` — *the connection was applied and checked 2026-11-19:*
+  - `modules/saga` holds `aws_cloudwatch_event_connection` `twr-<env>-saga`: OAuth client_credentials against the Cognito token endpoint, ops client, `ticketing/ops` only. The name falls under the saga role's `connection/twr-<env>-*` grant.
+  - Its secret is on the AWS-owned key (D11 row added).
+  - The client secret is read in the session from the ops client (`data "aws_cognito_user_pool_client"`), the one secret D13 accepts in state.
+  - Session toggle `enable_saga`.
+  - 4 test runs; 4 breaks each caught (grant, scope, name, method).
+  - Applied alone: 1 added. `describe-connection`: `AUTHORIZED`, `POST` to the token endpoint, no KMS key, secret `events!connection/twr-dev-saga/…`. EventBridge fetched a token on create, which proves the client, the secret, the token URL and the scope.
+  - Left: the state machine (and D11 for its execution history, which holds the buyer's email).
 - [ ] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role
 - [ ] README *Known gaps* closed in code (2026-11-16): saga `CheckAdmission` → `NotAdmitted` before `HoldSeat`; price owned by the seat and returned by the hold (`ALL_NEW`), `amountCents` dropped from the purchase template. Foundation applied 2026-11-16 (2 in place: the purchase integration and the published `definition_hash`; second plan clean). Left: verify on AWS a purchase without a pass fails `NotAdmitted` and the charge equals the seeded price
 - [ ] WAF baseline: the saga's requests (and the rest of a full session's traffic) reviewed in the WAF logs for baseline `count` matches, any false positive scoped out with its D-entry, then `waf_baseline_mode = "block"` (D5, D6; moved from slice 2, 2026-11-19)

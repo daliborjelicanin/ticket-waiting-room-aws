@@ -42,6 +42,9 @@ locals {
     "ecr/checkout-payment-service",
     "ecr/ticket-issuance-service",
     "messaging/queue/queue-admissions/url",
+    "cognito/user_pool_id",
+    "cognito/ops_client_id",
+    "cognito/token_url",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -340,4 +343,24 @@ check "migration_images" {
     condition     = !var.enable_db || length(local.migrations) == length(local.migration_repository)
     error_message = "enable_db is on, but no image digest is known for ${local.migration_images_missing}: that database gets no migration task. Push the image and re-source tf-env.sh."
   }
+}
+
+# --- the checkout saga: its connection, and the state machine next (D5, D13) -----------------
+
+# The ops client's secret, read from the client itself: the one secret D13 accepts in state.
+data "aws_cognito_user_pool_client" "ops" {
+  count = var.enable_saga ? 1 : 0
+
+  user_pool_id = local.foundation["cognito/user_pool_id"]
+  client_id    = local.foundation["cognito/ops_client_id"]
+}
+
+module "saga" {
+  source = "../../modules/saga"
+  count  = var.enable_saga ? 1 : 0
+
+  name_prefix   = local.name_prefix
+  token_url     = local.foundation["cognito/token_url"]
+  client_id     = local.foundation["cognito/ops_client_id"]
+  client_secret = data.aws_cognito_user_pool_client.ops[0].client_secret
 }
