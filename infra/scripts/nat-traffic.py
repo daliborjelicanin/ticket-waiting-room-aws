@@ -14,6 +14,7 @@ import collections
 import glob
 import ipaddress
 import json
+import os
 
 
 def networks(path):
@@ -40,11 +41,13 @@ def far_end(address):
 
 import pyarrow.parquet as pq  # noqa: E402  (installed at container start)
 
+# Optional: only flows that started at or after this epoch second (one session of a day).
+SINCE = int(os.environ.get("SINCE", "0"))
 rows = []
 files = glob.glob("/logs/**/*.parquet", recursive=True)
 for f in files:
-    table = pq.read_table(f, columns=["interface_id", "srcaddr", "dstaddr", "bytes"]).to_pylist()
-    rows += [r for r in table if r["srcaddr"] not in (None, "-")]
+    table = pq.read_table(f, columns=["interface_id", "srcaddr", "dstaddr", "bytes", "start"]).to_pylist()
+    rows += [r for r in table if r["srcaddr"] not in (None, "-") and (r["start"] or 0) >= SINCE]
 
 nat = {r["interface_id"] for r in rows
        if any(ipaddress.ip_address(r["srcaddr"]) in n for n in public)}

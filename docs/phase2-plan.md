@@ -1553,8 +1553,8 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
       - *Fixed in code 2026-11-18, in `security-starter`.* `BearerChallengeEntryPoint` removes the parameter from Spring's own challenge. `ProtectedResourceMetadataRefusal` answers the anonymous `/.well-known/oauth-protected-resource` endpoint with 404; it would name the same host.
       - Every service gets the fix with its next image. To check on the next session: a 401 through the stage is plain `Bearer`.
     - The 401 requests' traces are not joined to the edge's trace: only `security filterchain` spans arrive.
-- [ ] Saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5)
-- [ ] Verify: `k6/seat-race.js` through the edge → exactly one winner per seat; flow logs show DynamoDB and ECR layer traffic **not** via the NAT; WAF baseline sampled requests reviewed → block
+- *Moved to slice 3, 2026-11-19:* saga requests reviewed in the WAF baseline's sampled requests before switching to block (D5). The saga's own requests through the stage exist only once the saga runs, which is slice 3.
+- [x] Verify: `k6/seat-race.js` through the edge → exactly one winner per seat; flow logs show DynamoDB and ECR layer traffic **not** via the NAT; ~~WAF baseline sampled requests reviewed → block~~ *(moved to slice 3, 2026-11-19, with the item above)* — *done 2026-11-18, below*
   - *Flow logs, 2026-11-18*, from the two seat-inventory applies (2664 records). Method: the NAT's own interface is the one with an address in a public subnet. Every source it received from was matched against `ip-ranges.json` and the S3 / DynamoDB prefix lists.
     - **ECR layers skip the NAT.** 798 MB came from S3 to the app subnets through the gateway endpoint, about five task starts' worth of seat-inventory layers.
     - **The collector image does not.** 262 MB reached the NAT from CloudFront addresses. That is the ADOT sidecar from `public.ecr.aws`, whose layers are served from CloudFront, where no gateway endpoint reaches. It recurs on every task start and every scale-out.
@@ -1568,6 +1568,26 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
     - `scripts/seat-holds.sh` is the table-side check of the race.
     - `infra/scripts/nat-traffic.sh` makes the flow-log check repeatable. It reproduced the numbers above.
     - The seat paths are not buyer entry, so the race needs no `loadtest_allow_cidr`.
+  - **Seat race and flow logs: done, 2026-11-18** (session 20:27–20:50 UTC, destroyed, sweep clean). Image `9cb3cc4` carries the `security-starter` fix.
+    - **Exactly one winner per seat.** Two runs of 200 VUs on 10 seats through the stage, VPC link and ALB: **10 / 190 / 0** won / lost / unexpected each time, `http_req_failed` 0.
+      - `seat-holds.sh` after each: 10 HELD, each with its one holdId, nothing else.
+      - Winners p50/p95/p99 0.91/1.71/1.96 s, then 1.50/2.22/2.33 s. Losers 4.45/6.88/6.99 s, then 3.82/5.22/5.33 s.
+      - Phase 1's runs: losers 5.33/8.64/8.84 s, then 3.02/4.91/5.01 s.
+      - k6's `p(95)<2000` threshold on all holds fails, as Phase 1's numbers would have: losing costs the queue in front of one 0.25 vCPU task, not the write.
+    - **The time is behind the ALB.** The access log: losers 4.02 s at the stage and 4.01 s in the integration (p50), so API Gateway, the WAF and the VPC link add about 10 ms.
+      - The task's 1-minute CPU maximum was 21%, which a 10-second burst can hide, so CPU saturation is not shown.
+      - The SDK's default 50-connection pool queueing 200 concurrent conditional writes fits as well. To measure in slice 5's proof run (0.5 vCPU × 2 tasks, D7).
+      - One task throughout: target tracking does not react to a 10-second burst.
+    - **Flow logs, this session only** (`nat-traffic.sh 2026-11-18 20:25`).
+      - **DynamoDB took the gateway endpoint:** 0.65 MB from it and 1.37 MB to it, on the task's interface, and none through the NAT.
+      - ECR and collector layers: 212.5 MB from S3 through the endpoint.
+      - **No CloudFront through the NAT at all:** the pull-through import is done by ECR itself, so even the first pull never crosses the NAT. The last session had 262 MB.
+      - What is left on the NAT is regional AWS APIs (EC2 ranges, 0.4 MB in, 9.4 MB out). Most likely the telemetry exports and logs at 100% trace sampling, not checked.
+    - **The fixes, live.**
+      - A 401 through the stage is exactly `WWW-Authenticate: Bearer`, or Spring's RFC 6750 error for an invalid token, and names no host.
+      - The collector runs from `mirror-twr-dev/…:v0.50.0`, imported by the task's own role at first pull.
+      - A lifecycle preview on the mirror expires 0 images: the index protects its per-architecture children.
+    - The WAF baseline review moved to slice 3 (2026-11-19): it needs the saga's own requests.
 - **Learn:** private integration, SG chains, why ECR pulls go via the S3 endpoint
 
 ### 3. Data + saga — ≈ $0.20/h
@@ -1575,7 +1595,8 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - [ ] EventBridge connection + state machine from `templatefile()`
 - [ ] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role
 - [ ] README *Known gaps* closed in code (2026-11-16): saga `CheckAdmission` → `NotAdmitted` before `HoldSeat`; price owned by the seat and returned by the hold (`ALL_NEW`), `amountCents` dropped from the purchase template. Foundation applied 2026-11-16 (2 in place: the purchase integration and the published `definition_hash`; second plan clean). Left: verify on AWS a purchase without a pass fails `NotAdmitted` and the charge equals the seeded price
-- [ ] Verify: purchase happy path; **the refund path on AWS for the first time** (`runbook-checkout-saga.md`, *The Refund Path*)
+- [ ] WAF baseline: the saga's requests (and the rest of a full session's traffic) reviewed in the WAF logs for baseline `count` matches, any false positive scoped out with its D-entry, then `waf_baseline_mode = "block"` (D5, D6; moved from slice 2, 2026-11-19)
+- [ ] Verify: purchase happy path; **the refund path on AWS for the first time** (`runbook-checkout-saga.md`, *The Refund Path*); both still green with the baseline in `block`
 - **Learn:** migrations as a deploy step, ECS Exec as the bastion
 
 ### 4. CI/CD — $0

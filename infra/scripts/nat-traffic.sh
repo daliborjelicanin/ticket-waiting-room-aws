@@ -4,7 +4,8 @@
 # collector image comes through the pull-through cache rather than CloudFront.
 #
 #   source infra/scripts/tf-env.sh
-#   infra/scripts/nat-traffic.sh 2026-11-18
+#   infra/scripts/nat-traffic.sh 2026-11-18          # the whole day
+#   infra/scripts/nat-traffic.sh 2026-11-18 20:25    # from 20:25 UTC on: one session
 #
 # Read-only. Downloads that day's flow logs from foundation's bucket into a temporary
 # directory, with the VPC's subnets, the S3 and DynamoDB prefix lists and AWS's published
@@ -13,6 +14,8 @@
 # 7 days. Nothing printed names the account or an address.
 set -euo pipefail
 DAY=${1:?day as YYYY-MM-DD}
+SINCE=0
+[[ -n "${2:-}" ]] && SINCE=$(date -u -d "${DAY}T${2}:00Z" +%s)
 [[ "${AWS_PROFILE:-}" == twr-dev ]] || { echo "AWS_PROFILE is not twr-dev -- source infra/scripts/tf-env.sh first" >&2; exit 1; }
 REGION=${AWS_REGION:-eu-central-1}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +38,6 @@ done
 curl -sSf -o "$WORK/in/ip-ranges.json" https://ip-ranges.amazonaws.com/ip-ranges.json
 cp "$HERE/nat-traffic.py" "$WORK/script/"
 
-DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock} docker run --rm --network bridge \
+DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock} docker run --rm --network bridge -e SINCE="$SINCE" \
   -v "$WORK/logs:/logs:ro" -v "$WORK/in:/in:ro" -v "$WORK/script:/script:ro" python:3.12-slim \
   sh -c 'pip install -q --root-user-action=ignore pyarrow==22.0.0 2>/dev/null && python -I /script/nat-traffic.py'
