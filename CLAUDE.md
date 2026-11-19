@@ -150,6 +150,11 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   read-only: what went through the session NAT that day, by the AWS service at the far end,
   and what took the S3/DynamoDB gateway endpoints instead, from the flow logs (D3, D4); see
   `docs/runbook-session-edge.md` §6
+- `infra/scripts/migrate.sh <checkout|ticketing>` (after `source infra/scripts/tf-env.sh`, with
+  the session up with `enable_db` and `enable_nat`) — runs that database's migration task
+  (the service image's `migrate` profile, D10) on on-demand Fargate, waits for it, prints the
+  log tail with the RDS host and account masked, and exits with the container's code (2 if it
+  never ran). Run before the service is updated
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a

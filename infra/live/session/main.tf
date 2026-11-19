@@ -37,6 +37,10 @@ locals {
     "db/instance_identifier",
     "db/secret_name/checkout_app",
     "db/secret_name/ticketing_app",
+    "iam/role/migrate-task",
+    "iam/role/migrate-execution",
+    "ecr/checkout-payment-service",
+    "ecr/ticket-issuance-service",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -55,6 +59,26 @@ locals {
 
   # One login role per service, DML on its own database (D9).
   db_service_roles = ["checkout_app", "ticketing_app"]
+
+  # Per database: the image whose migrate profile owns it, and the role it creates (D10).
+  # Literal flat maps, read as local.x[each.key] (infra/CLAUDE.md).
+  migration_repository = {
+    checkout  = "checkout-payment-service"
+    ticketing = "ticket-issuance-service"
+  }
+  migration_role = {
+    checkout  = "checkout_app"
+    ticketing = "ticketing_app"
+  }
+  # A migration task exists only for an image that has been pushed: its definition pins the
+  # digest (D15). The check below warns about any database left without one.
+  migrations = var.enable_db ? toset([
+    for db, repo in local.migration_repository : db if contains(keys(var.image_digests), repo)
+  ]) : toset([])
+  # Outside the check's message: a for inside an interpolation does not parse in IntelliJ (infra/CLAUDE.md).
+  migration_images_missing = join(", ", [
+    for db, repo in local.migration_repository : repo if !contains(keys(var.image_digests), repo)
+  ])
 
   # --- the services (D7, D21, D25) ---
   # Literal flat maps keyed by service: IntelliJ cannot resolve local.map[key].attr
@@ -178,8 +202,9 @@ module "waf" {
 
 # --- compute: the cluster and the services (D7, D9, D21) ----------------------------------------
 
+# Also with the database alone: the migration tasks run in it (D10). An empty cluster is free.
 resource "aws_ecs_cluster" "this" {
-  count = length(var.services) > 0 ? 1 : 0
+  count = length(var.services) > 0 || var.enable_db ? 1 : 0
 
   name = local.name_prefix
 
@@ -202,7 +227,7 @@ resource "aws_ecs_cluster" "this" {
 }
 
 resource "aws_ecs_cluster_capacity_providers" "this" {
-  count = length(var.services) > 0 ? 1 : 0
+  count = length(aws_ecs_cluster.this)
 
   cluster_name       = aws_ecs_cluster.this[0].name
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
@@ -273,4 +298,31 @@ module "cache" {
   security_group_id = local.foundation["network/sg/cache"]
   availability_zone = data.aws_subnet.first_db.availability_zone
   kms_key_arn       = local.foundation["kms/key_arn"]
+}
+
+# --- migrations: one task definition per database, run before its service (D10) --------------
+
+module "migration" {
+  source   = "../../modules/migration-task"
+  for_each = local.migrations
+
+  name               = "${local.name_prefix}-migrate-${each.key}"
+  image_uri          = "${local.foundation["ecr/${local.migration_repository[each.key]}"]}@${var.image_digests[local.migration_repository[each.key]]}"
+  task_role_arn      = local.foundation["iam/role/migrate-task"]
+  execution_role_arn = local.foundation["iam/role/migrate-execution"]
+  log_group_name     = "/twr/${var.env}/ecs/migrate"
+  region             = var.region
+
+  db_address        = module.rds[0].address
+  db_port           = module.rds[0].port
+  database          = each.key
+  master_secret_arn = module.rds[0].master_secret_arn
+  app_secret_arn    = module.rds[0].service_secret_arns[local.migration_role[each.key]]
+}
+
+check "migration_images" {
+  assert {
+    condition     = !var.enable_db || length(local.migrations) == length(local.migration_repository)
+    error_message = "enable_db is on, but no image digest is known for ${local.migration_images_missing}: that database gets no migration task. Push the image and re-source tf-env.sh."
+  }
 }
