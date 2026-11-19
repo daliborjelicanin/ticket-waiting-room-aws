@@ -89,3 +89,22 @@ misconfigurations:
     statement: >-
       D7: Container Insights is billed per metric and duplicates the services' own meters
       (OTLP to the collector sidecar) plus ECS's free service metrics.
+
+  - id: AWS-0077
+    paths: ["modules/rds/main.tf"]
+    statement: >-
+      D24: the session's Postgres is rebuilt from Flyway every session, so dev runs with no
+      automated backups (a faster create, no backup storage). Production is 7 days with PITR,
+      one variable (backup_retention_days).
+
+  - id: AWS-0177
+    paths: ["modules/rds/main.tf"]
+    statement: >-
+      D24: destroyed with every session. Production sets deletion_protection = true, one variable.
+
+  - id: AWS-0176
+    paths: ["modules/rds/main.tf"]
+    statement: >-
+      D9: IAM database authentication is not chosen. A 15-minute token behind a Hikari pool is
+      real code for no gain at this scale; each service logs in as its own role with a password
+      from Secrets Manager on the CMK (D13).

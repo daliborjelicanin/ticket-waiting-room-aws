@@ -6,6 +6,11 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.73"
     }
+    # The per-service DB passwords, minted ephemeral (modules/rds, D13).
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.7"
+    }
   }
 
   # Partial configuration: the bucket name carries the account id, so it is never committed.

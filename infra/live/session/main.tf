@@ -29,6 +29,14 @@ locals {
     "dynamodb/seat_table_name",
     "cognito/issuer_uri",
     "ecr/mirror/aws-observability/aws-otel-collector",
+    "kms/key_arn",
+    "network/db_subnet_ids",
+    "network/db_subnet_group_name",
+    "network/sg/db",
+    "network/sg/cache",
+    "db/instance_identifier",
+    "db/secret_name/checkout_app",
+    "db/secret_name/ticketing_app",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -43,6 +51,10 @@ locals {
   app_subnet_ids      = split(",", local.foundation["network/app_subnet_ids"])
   public_subnet_ids   = split(",", local.foundation["network/public_subnet_ids"])
   app_route_table_ids = split(",", local.foundation["network/app_route_table_ids"])
+  db_subnet_ids       = split(",", local.foundation["network/db_subnet_ids"])
+
+  # One login role per service, DML on its own database (D9).
+  db_service_roles = ["checkout_app", "ticketing_app"]
 
   # --- the services (D7, D21, D25) ---
   # Literal flat maps keyed by service: IntelliJ cannot resolve local.map[key].attr
@@ -227,4 +239,38 @@ module "service" {
     target_group_arn_suffix = module.alb[0].target_group_arn_suffixes[each.key]
     alb_arn_suffix          = module.alb[0].arn_suffix
   } : null
+}
+
+# --- data: Postgres and the queue store (D8, D9, D13) --------------------------------------------
+
+# The single-AZ stores sit in the first db subnet's zone, which is the NAT's (D3).
+data "aws_subnet" "first_db" {
+  id = local.db_subnet_ids[0]
+}
+
+module "rds" {
+  source = "../../modules/rds"
+  count  = var.enable_db ? 1 : 0
+
+  identifier           = local.foundation["db/instance_identifier"]
+  engine_version       = var.postgres_version
+  kms_key_arn          = local.foundation["kms/key_arn"]
+  db_subnet_group_name = local.foundation["network/db_subnet_group_name"]
+  security_group_id    = local.foundation["network/sg/db"]
+  availability_zone    = data.aws_subnet.first_db.availability_zone
+
+  service_secret_names   = { for role in local.db_service_roles : role => local.foundation["db/secret_name/${role}"] }
+  service_secret_version = var.db_secret_version
+}
+
+module "cache" {
+  source = "../../modules/cache"
+  count  = var.enable_cache ? 1 : 0
+
+  name              = "${local.name_prefix}-queue"
+  engine_version    = var.valkey_version
+  subnet_ids        = local.db_subnet_ids
+  security_group_id = local.foundation["network/sg/cache"]
+  availability_zone = data.aws_subnet.first_db.availability_zone
+  kms_key_arn       = local.foundation["kms/key_arn"]
 }

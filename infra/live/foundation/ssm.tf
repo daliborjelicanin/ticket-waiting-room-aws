@@ -53,6 +53,10 @@ locals {
       "waf/log_bucket_arn"             = module.waf_log_bucket.arn
     },
     { for k, id in module.network.security_group_ids : "network/sg/${k}" => id },
+    # Names decided here once (D25), and the IAM roles are scoped to them: the session creates
+    # the instance and the secrets under exactly these.
+    { "db/instance_identifier" = local.db.instance_identifier },
+    { for role, name in local.db.service_secret_names : "db/secret_name/${role}_app" => name },
     { for k, url in module.ecr.repository_urls : "ecr/${k}" => url },
     { for k, url in module.ecr.mirror_urls : "ecr/mirror/${k}" => url },
     { for k, url in module.messaging.queue_urls : "messaging/queue/${k}/url" => url },

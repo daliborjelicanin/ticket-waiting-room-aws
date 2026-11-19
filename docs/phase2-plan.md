@@ -790,6 +790,7 @@ transit.** *Settled 2026-11-11.*
   | S3 QR bucket | CMK | a QR **is** a ticket, a bearer credential |
   | SQS queues, SNS topic | CMK | `purchase-confirmed` carries the buyer's email |
   | Secrets Manager (per-service DB secrets, RDS master secret) | CMK | credentials; the key policy becomes a second gate on who can decrypt them |
+  | ElastiCache Valkey (the waiting-room queue) | CMK | *added 2026-11-19, writing `modules/cache`:* the queue holds queue tokens, bearer values (D8), so the rule puts it here. It covers the node's disk and swap; snapshots are off |
   | DynamoDB seat and connection tables | AWS-owned | no personal data beyond a pseudonymous `sub`; a CMK would put a key-state dependency on the hottest conditional-write path for no confidentiality gain |
   | CloudWatch Logs | AWS-owned | instead, the rule is **no personal data in logs**: emails are never logged, which is an application rule that is already true and stays true |
   | Terraform state bucket | SSE-S3 + bucket policy | access, not the key, is the control. Only `tf-plan`, the two `tf-apply-*` roles and the owner's SSO role can read it; a second key would cost $1/month to restate that policy |
@@ -1591,7 +1592,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 - **Learn:** private integration, SG chains, why ECR pulls go via the S3 endpoint
 
 ### 3. Data + saga — ≈ $0.20/h
-- [ ] RDS (private, CMK), Valkey (TLS), `migrate` profile + migration task creating databases and per-service roles (D9, D10, D13)
+- [ ] RDS (private, CMK), Valkey (TLS), `migrate` profile + migration task creating databases and per-service roles (D9, D10, D13) — *Terraform half written and planned 2026-11-19, not applied. `modules/rds`: Postgres 18.6 on `db.t4g.micro`, gp3 20 GB, single AZ, storage, master secret and Database Insights (standard, 7 days) on the CMK, parameter group pinning `rds.force_ssl` and `log_lock_waits`, dev values (no backups, no final snapshot, no deletion protection) one variable each (D24). It also mints the per-service secrets `checkout_app` and `ticketing_app`, write-only from an ephemeral password, so no password reaches state. `modules/cache`: Valkey 9.1, one `cache.t4g.micro` node in the db subnets, TLS `required`, at rest on the CMK (D11 row added), no snapshots. Session toggles `enable_db` and `enable_cache`. Tests: rds 6, cache 3; trivy clean (AWS-0077 and AWS-0177 for D24, AWS-0176 for D9). Foundation applied (3 SSM parameters added; second plan clean). Session: No changes with everything off; 8 to add with both on, read attribute by attribute. Left: the `migrate` profile, the migration task, and the live check*
 - [ ] EventBridge connection + state machine from `templatefile()`
 - [ ] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role
 - [ ] README *Known gaps* closed in code (2026-11-16): saga `CheckAdmission` → `NotAdmitted` before `HoldSeat`; price owned by the seat and returned by the hold (`ALL_NEW`), `amountCents` dropped from the purchase template. Foundation applied 2026-11-16 (2 in place: the purchase integration and the published `definition_hash`; second plan clean). Left: verify on AWS a purchase without a pass fails `NotAdmitted` and the charge equals the seeded price

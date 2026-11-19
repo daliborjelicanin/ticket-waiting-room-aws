@@ -127,3 +127,33 @@ variable "task_size" {
     error_message = "task_size values are feature or proof."
   }
 }
+
+variable "enable_db" {
+  description = "RDS Postgres and the per-service login secrets (D9, D13). ~$0.019/h; about 10 minutes to create."
+  type        = bool
+  default     = false
+}
+
+variable "enable_cache" {
+  description = "Valkey for the waiting room's queue (D8). ~$0.014/h."
+  type        = bool
+  default     = false
+}
+
+variable "postgres_version" {
+  description = "Postgres major.minor (D9). The services' Testcontainers image runs the same major."
+  type        = string
+  default     = "18.6"
+}
+
+variable "valkey_version" {
+  description = "Valkey major.minor (D8)."
+  type        = string
+  default     = "9.1"
+}
+
+variable "db_secret_version" {
+  description = "Version of the per-service DB passwords. Bump to rotate: bump, migrate, redeploy in one session.sh run (D13, D23)."
+  type        = number
+  default     = 1
+}
