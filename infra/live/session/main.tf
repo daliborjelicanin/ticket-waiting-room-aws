@@ -48,6 +48,11 @@ locals {
     "iam/role/saga",
     "messaging/queue/ticket-issuance/url",
     "messaging/topic/purchase-confirmed/arn",
+    "messaging/queue/qr-generation/url",
+    "messaging/queue/purchase-confirmed-notifications/url",
+    "s3/qr_bucket_name",
+    "ses/from_address",
+    "ses/fallback_recipient",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -94,16 +99,25 @@ locals {
   service_repository = {
     seat-inventory = "seat-inventory-service"
     waiting-room   = "waiting-room-service"
+    checkout       = "checkout-payment-service"
+    issuance       = "ticket-issuance-service"
+    notification   = "notification-service"
   }
 
   # Listener rules: lower number first, first match wins (runbook-alb-apigateway.md).
+  # issuance before checkout: an ALB "*" matches across "/", so checkout's /orders/* would
+  # also take /orders/{id}/tickets. notification has no HTTP surface (a queue consumer).
   service_route_priority = {
     waiting-room   = 10
     seat-inventory = 20
+    issuance       = 30
+    checkout       = 40
   }
   service_route_paths = {
     waiting-room   = ["/events/*/queue", "/events/*/queue/admit", "/events/*/admissions/*"]
     seat-inventory = ["/events/*/seats/*", "/admin/events/*/seats"]
+    issuance       = ["/orders/*/tickets", "/tickets/*/qr"]
+    checkout       = ["/orders", "/orders/*"]
   }
 
   # Names and references only, never a typed value (D25).
@@ -124,6 +138,52 @@ locals {
       COGNITO_ISSUER_URI  = local.foundation["cognito/issuer_uri"]
       AWS_REGION          = var.region
     }
+    # Its own role on its own database (D9); never migrates (D10: migrate.sh did, as master).
+    checkout = {
+      DB_URL                = local.db_url["checkout"]
+      SPRING_FLYWAY_ENABLED = "false"
+      COGNITO_ISSUER_URI    = local.foundation["cognito/issuer_uri"]
+    }
+    issuance = {
+      DB_URL                = local.db_url["ticketing"]
+      SPRING_FLYWAY_ENABLED = "false"
+      ISSUANCE_QUEUE_URL    = local.foundation["messaging/queue/ticket-issuance/url"]
+      QR_QUEUE_URL          = local.foundation["messaging/queue/qr-generation/url"]
+      QR_BUCKET             = local.foundation["s3/qr_bucket_name"]
+      COGNITO_ISSUER_URI    = local.foundation["cognito/issuer_uri"]
+      AWS_REGION            = var.region
+    }
+    # SES sandbox (D20 deferred the domain): both addresses are verified identities.
+    # TICKET_BASE_URL is the stage: a QR link in the email goes through the edge (D19).
+    notification = {
+      NOTIFICATION_QUEUE_URL = local.foundation["messaging/queue/purchase-confirmed-notifications/url"]
+      NOTIFICATION_SENDER    = "ses"
+      NOTIFICATION_FROM      = local.foundation["ses/from_address"]
+      NOTIFICATION_TO        = local.foundation["ses/fallback_recipient"]
+      TICKET_BASE_URL        = one(module.rest_stage[*].invoke_url)
+      COGNITO_ISSUER_URI     = local.foundation["cognito/issuer_uri"]
+      AWS_REGION             = var.region
+    }
+  }
+
+  # The database services' login, from their own secrets' JSON keys (D13). null with enable_db
+  # off, which var.services refuses for these two.
+  db_url = {
+    checkout  = "jdbc:postgresql://${one(module.rds[*].address)}:5432/checkout?sslmode=require"
+    ticketing = "jdbc:postgresql://${one(module.rds[*].address)}:5432/ticketing?sslmode=require"
+  }
+  service_secrets = {
+    seat-inventory = {}
+    waiting-room   = {}
+    notification   = {}
+    checkout = var.enable_db ? {
+      DB_USERNAME = "${module.rds[0].service_secret_arns["checkout_app"]}:username::"
+      DB_PASSWORD = "${module.rds[0].service_secret_arns["checkout_app"]}:password::"
+    } : {}
+    issuance = var.enable_db ? {
+      DB_USERNAME = "${module.rds[0].service_secret_arns["ticketing_app"]}:username::"
+      DB_PASSWORD = "${module.rds[0].service_secret_arns["ticketing_app"]}:password::"
+    } : {}
   }
 
   # 0.25 vCPU for feature slices, 0.5 for the proof (D7). 1 GB either way: the collector
@@ -272,6 +332,7 @@ module "service" {
   security_group_id  = local.foundation["network/sg/${each.key}"]
 
   environment                = local.service_environment[each.key]
+  secrets                    = local.service_secrets[each.key]
   log_group_name             = local.service_log_group[each.key]
   region                     = var.region
   collector_config_parameter = local.collector_config_parameter

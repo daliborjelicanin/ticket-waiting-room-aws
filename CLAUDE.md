@@ -150,6 +150,10 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   read-only: what went through the session NAT that day, by the AWS service at the far end,
   and what took the S3/DynamoDB gateway endpoints instead, from the flow logs (D3, D4); see
   `docs/runbook-session-edge.md` §6
+- `infra/scripts/session.sh up|down [-- <terraform args>]` (after `source infra/scripts/tf-env.sh`)
+  — the whole session in D23's order: apply data, edge, saga and seat-inventory; `migrate.sh`
+  both databases; apply every service. `down` destroys and runs the sweep. Each apply asks
+  for approval unless `AUTO_APPROVE=1`. See `docs/runbook-session.md`
 - `infra/scripts/migrate.sh <checkout|ticketing>` (after `source infra/scripts/tf-env.sh`, with
   the session up with `enable_db` and `enable_nat`) — runs that database's migration task
   (the service image's `migrate` profile, D10) on on-demand Fargate, waits for it, prints the

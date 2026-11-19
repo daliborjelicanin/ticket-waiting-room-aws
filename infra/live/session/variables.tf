@@ -74,13 +74,18 @@ variable "loadtest_allow_cidr" {
 }
 
 variable "services" {
-  description = "ECS services to run (D7, D23). A service joins this list once its wiring is in main.tf; the others follow in slice 3. Needs enable_nat (ECR, logs, Cognito's JWKS) and, for an HTTP service, enable_alb."
+  description = "ECS services to run (D7, D23), brought up in order by infra/scripts/session.sh. Needs enable_nat (ECR, logs, Cognito's JWKS) and, for an HTTP service, enable_alb."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for s in var.services : contains(["seat-inventory", "waiting-room"], s)])
-    error_message = "Only seat-inventory and waiting-room are wired so far."
+    condition     = alltrue([for s in var.services : contains(["seat-inventory", "waiting-room", "checkout", "issuance", "notification"], s)])
+    error_message = "One of seat-inventory, waiting-room, checkout, issuance, notification."
+  }
+
+  validation {
+    condition     = !(contains(var.services, "checkout") || contains(var.services, "issuance")) || var.enable_db
+    error_message = "checkout and issuance need enable_db, and their databases migrated first: bring them up with infra/scripts/session.sh up (D23)."
   }
 
   validation {
