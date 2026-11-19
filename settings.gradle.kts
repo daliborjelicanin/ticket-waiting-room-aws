@@ -8,6 +8,7 @@ include(
     "common",
     "security-starter",
     "observability-starter",
+    "migration-starter",
     "waiting-room-service",
     "seat-inventory-service",
     "checkout-payment-service",

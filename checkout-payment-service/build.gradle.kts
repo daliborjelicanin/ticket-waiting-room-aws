@@ -20,6 +20,9 @@ dependencies {
     // Boot 4 split autoconfiguration into per-technology modules: flyway-core on its own
     // no longer triggers it, and the schema silently never migrates.
     implementation(libs.spring.boot.flyway)
+    // The `migrate` profile (D10): this image, run as a one-off task before the service is
+    // updated, creates the database and this service's DML-only role, then migrates.
+    implementation(project(":migration-starter"))
     runtimeOnly(libs.flyway.postgresql)
     runtimeOnly(libs.postgresql)
 

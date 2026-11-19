@@ -87,6 +87,14 @@ it diffs as text.
   local default. Each service keeps its own `XxxMetrics` with only the meters the dashboard
   asks for — Boot's JVM/Tomcat series are disabled because every series is a billable
   CloudWatch metric. Kept out of `common` for the same reason `security-starter` is.
+- `migration-starter` — `java-library`, the `migrate` Spring profile (Phase 2 D9/D10/D13):
+  the service's own image, run as a one-off task as the RDS master, creates its database and
+  login role (password from the role's secret, reset on every run), runs Flyway, grants the
+  role DML only, takes `CONNECT` away from `PUBLIC`, and exits 0 or 1. Running services log
+  in as that role and never migrate, so a service cannot alter its schema or open the other
+  service's database; Postgres enforces that, not code. Used by `checkout-payment-service`
+  and `ticket-issuance-service`; local `bootRun` (no profile) migrates as before. See its
+  `ARCHITECTURE.md`.
 - `waiting-room-service`, `seat-inventory-service`, `checkout-payment-service`,
   `ticket-issuance-service`, `notification-service` — one Spring Boot app per bounded
   context, each an ECS Fargate task per CLAUDE.md's Compute section.

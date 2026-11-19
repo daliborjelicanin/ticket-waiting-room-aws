@@ -62,7 +62,7 @@ class TicketIssuanceIT {
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:18-alpine");
 
     @Container
     static final LocalStackContainer LOCALSTACK = new LocalStackContainer(

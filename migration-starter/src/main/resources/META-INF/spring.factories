@@ -1,0 +1,3 @@
+# The migrate profile: web off, Flyway on, at the highest precedence (MigrateProfile).
+org.springframework.boot.EnvironmentPostProcessor=\
+com.ticketwaitingroom.migration.MigrateProfile

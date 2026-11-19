@@ -13,6 +13,8 @@ spring:
           # credentials, and the pool is free.
           issuer-uri: ${COGNITO_ISSUER_URI:}
   datasource:
+    # In ECS (Phase 2, D9/D10): the service's own DML-only role from its secret; in the
+    # migrate profile, the RDS master, which only the migration task uses (migration-starter).
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ticketing}
     username: ${DB_USERNAME:ticketing}
     password: ${DB_PASSWORD:ticketing}

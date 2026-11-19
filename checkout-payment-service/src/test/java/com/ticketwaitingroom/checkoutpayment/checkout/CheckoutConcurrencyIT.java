@@ -62,7 +62,7 @@ class CheckoutConcurrencyIT {
     private static final String CUSTOMER = "b4c1e0a2-1111-4000-8000-000000000009";
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:18-alpine");
 
     @DynamicPropertySource
     static void datasource(DynamicPropertyRegistry registry) {

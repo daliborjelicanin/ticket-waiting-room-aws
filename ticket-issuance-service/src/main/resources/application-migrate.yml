@@ -1,0 +1,6 @@
+# The migrate profile (D10; migration-starter turns the web server off and Flyway on). The
+# migration task must not consume the issuance queue: it runs as the master user, and it exits
+# seconds after starting, so it would issue tickets with the wrong role and leave a batch half done.
+ticket-issuance:
+  consumer:
+    enabled: false
