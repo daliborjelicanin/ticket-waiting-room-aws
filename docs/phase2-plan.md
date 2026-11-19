@@ -1634,7 +1634,7 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
     - **Applied.** Foundation: 2 changed, and a second plan was clean. Session: 1 added. `describe-state-machine` shows `ACTIVE`, STANDARD, `CUSTOMER_MANAGED_KMS_KEY`, logging `ALL` with `includeExecutionData` false, X-Ray on.
     - **Live check.** One execution was started directly, with a marker email and service URLs at a nonexistent API id (inside the role's `execute-api` grant). It failed closed, as designed, in 4 s: `CheckAdmission` hit `States.Http.IpError` three times (the call and its 2 retries), then `AdmissionNotVerified`. The history is readable on the CMK. All 14 events reached `/aws/vendedlogs/states/twr-dev-checkout-saga`, with `details` limited to type, name, error, cause and resource. The marker email and the payment token appear in no log event. The connection's token against real services, and the purchase and refund paths, are the slice 3 verify item.
     - **Found.** trivy scans a saved `*.tfplan` left in `infra/` as a plan snapshot, whose paths miss `.trivyignore.yaml`'s scoping, and fails. Remove plan files before scanning (CI never has them).
-- [ ] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role — *written and planned 2026-11-19, not yet run:*
+- [x] `infra/scripts/session.sh up`: all five services, in the D23 order, each on its own DML-only DB role — *written and planned 2026-11-19, not yet run:*
   - **Session wiring.** checkout, issuance and notification are wired into the session.
     - **Routes:** ALB rules issuance 30 (`/orders/*/tickets`, `/tickets/*/qr`) before checkout 40 (`/orders`, `/orders/*`), because an ALB `*` crosses `/`. notification has no HTTP surface.
     - **Databases:** each database service logs in from its own secret's JSON keys, with `SPRING_FLYWAY_ENABLED=false` (D10).
@@ -1644,6 +1644,15 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
   - **Image.** notification was pushed at `5b87541` (arm64).
   - **Plan.** The full end state is 57 to add; the connection and state machine already exist.
   - **Runbook.** `docs/runbook-session.md`.
+  - **Run 2026-11-19 with `AUTO_APPROVE=1`, exit 0.**
+    - **Stage 1:** 36 added. Postgres took 6m28s, Valkey 10m41s, seat-inventory steady in 1m58s.
+    - **Stage 2:** `migrate.sh checkout` applied 2 migrations, exit 0, 63 s; `migrate.sh ticketing` applied 1, exit 0, 75 s.
+    - **Stage 3:** waiting-room, issuance, checkout and notification steady in 0m56s–2m39s. `describe-services`: all five 1/1, `COMPLETED`.
+    - **Found: two drifts that kept a second plan from being clean, fixed in the same session.**
+      - `rds.force_ssl` is a static parameter that RDS stores as `pending-reboot`; the provider's default `immediate` re-applied it on every apply. Now `apply_method = "pending-reboot"`, with a test.
+      - rest-stage's deployment trigger hashed whole integration objects. Computed attributes read back differently after a create, so the next apply replaced the deployment for nothing (foundation's `definition_hash` had the same cause in slice 2). It now hashes the integrations' arguments, with a test.
+    - **After one apply under the new formula** (1 added, 1 changed, 1 destroyed: the deployment swap), the second plan with every toggle on showed No changes.
+    - **IntelliJ:** "HTTP links are not secure" on the two ALB URIs, the deliberate D5 hop, is suppressed with its reason (`infra/CLAUDE.md` row added).
 - [ ] README *Known gaps* closed in code (2026-11-16): saga `CheckAdmission` → `NotAdmitted` before `HoldSeat`; price owned by the seat and returned by the hold (`ALL_NEW`), `amountCents` dropped from the purchase template. Foundation applied 2026-11-16 (2 in place: the purchase integration and the published `definition_hash`; second plan clean). Left: verify on AWS a purchase without a pass fails `NotAdmitted` and the charge equals the seeded price
 - [ ] WAF baseline: the saga's requests (and the rest of a full session's traffic) reviewed in the WAF logs for baseline `count` matches, any false positive scoped out with its D-entry, then `waf_baseline_mode = "block"` (D5, D6; moved from slice 2, 2026-11-19)
 - [ ] Verify: purchase happy path; **the refund path on AWS for the first time** (`runbook-checkout-saga.md`, *The Refund Path*); both still green with the baseline in `block`

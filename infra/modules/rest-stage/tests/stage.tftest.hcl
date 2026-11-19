@@ -117,3 +117,19 @@ run "nlb_target_refused" {
 
   expect_failures = [var.alb_arn]
 }
+
+# The deployment trigger hashes the integrations' arguments, never computed attributes.
+run "redeployment_follows_the_integrations_arguments" {
+  command = plan
+
+  assert {
+    condition     = length(local.integration_inputs) == 1 + length(var.queue_http_methods)
+    error_message = "The trigger covers the proxy and every queue integration."
+  }
+
+  assert {
+    condition     = alltrue([for i in local.integration_inputs : (length(i) == 9)])
+    error_message = "Each integration contributes its arguments, not the whole object (computed attributes moved the hash after every create)."
+  }
+}
+

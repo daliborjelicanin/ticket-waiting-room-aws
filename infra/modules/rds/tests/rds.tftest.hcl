@@ -41,8 +41,8 @@ run "private_and_on_the_cmk" {
   }
 
   assert {
-    condition     = anytrue([for p in aws_db_parameter_group.this.parameter : (p.name == "rds.force_ssl" && p.value == "1")])
-    error_message = "TLS only: rds.force_ssl pinned to 1."
+    condition     = anytrue([for p in aws_db_parameter_group.this.parameter : (p.name == "rds.force_ssl" && p.value == "1" && p.apply_method == "pending-reboot")])
+    error_message = "TLS only: rds.force_ssl pinned to 1, as the static parameter RDS stores it as (pending-reboot), or every apply re-applies it."
   }
 
   assert {

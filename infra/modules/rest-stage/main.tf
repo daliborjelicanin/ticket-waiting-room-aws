@@ -24,6 +24,8 @@ resource "aws_api_gateway_integration" "proxy" {
   # The ALB itself. A stage variable is rejected here (D5), which is why this lives in session.
   integration_target = var.alb_arn
   # Host and path sent to the ALB; the port is the listener's.
+  # HTTP inside the VPC, to the internal ALB only its SG pair reaches (D5; TLS needs the domain, D20).
+  # noinspection HttpUrlsUsage
   uri = "http://${var.alb_dns_name}/{proxy}"
 
   request_parameters = {
@@ -48,6 +50,8 @@ resource "aws_api_gateway_integration" "queue" {
   connection_id           = aws_apigatewayv2_vpc_link.this.id
   integration_target      = var.alb_arn
   # The resource path is the service path; {eventId} is filled from the mapping below.
+  # HTTP inside the VPC, to the internal ALB only its SG pair reaches (D5; TLS needs the domain, D20).
+  # noinspection HttpUrlsUsage
   uri = "http://${var.alb_dns_name}${var.queue_path}"
 
   request_parameters = {
@@ -57,13 +61,26 @@ resource "aws_api_gateway_integration" "queue" {
   timeout_milliseconds = 29000
 }
 
+# What the integrations serve, from their arguments only. Hashing the whole resource objects
+# (as at first) moved the hash once after every create: attributes known only after apply read
+# back differently, and the next apply replaced the deployment for nothing (found 2026-11-19,
+# the first full session; foundation's definition_hash had the same cause in slice 2).
+locals {
+  integration_inputs = [
+    for i in concat([aws_api_gateway_integration.proxy], values(aws_api_gateway_integration.queue)) : [
+      i.http_method, i.type, i.integration_http_method, i.connection_type, i.connection_id,
+      i.integration_target, i.uri, i.request_parameters, i.timeout_milliseconds,
+    ]
+  ]
+}
+
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = var.rest_api_id
 
   # A deployment is a snapshot: without a trigger, a changed method or integration is never
   # served (retro §3). Foundation's side arrives as its published definition_hash.
   triggers = {
-    redeployment = sha1(jsonencode([var.definition_hash, aws_api_gateway_integration.proxy, aws_api_gateway_integration.queue]))
+    redeployment = sha1(jsonencode([var.definition_hash, local.integration_inputs]))
   }
 
   lifecycle {

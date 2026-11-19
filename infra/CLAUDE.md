@@ -51,6 +51,7 @@ the form that resolves:
 | `each.value.<attr>` when `for_each` is a map built by `merge()` or a `for` expression | Flat maps of plain values keyed alike (`role_policy`, `role_principal`), read as `local.x[each.key]`; build them with `merge()` of `for` expressions over **typed** sources |
 | `local.map[each.key].<attr>`, even on a literal map | A flat map of that attribute: `local.rule_description[each.key]` |
 | `<iterator>.value.<attr>` in a `dynamic` block | Iterate a flat map and use `<iterator>.value` / `local.x[<iterator>.key]` |
+| Weak warning "HTTP links are not secure" on an `http://` string, where plain HTTP is a decision (the VPC link to the internal ALB, D5) | `# noinspection HttpUrlsUsage` on the line above, below a comment naming the D-entry |
 | A `for` expression inside a string interpolation: `"x-${join("", [for i in range(3) : "y"])}"` | Compute it outside the string (a local), or write the literal |
 
 What does resolve: `each.value.<attr>` over a **literal** map of objects or over a typed

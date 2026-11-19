@@ -14,10 +14,14 @@ resource "aws_db_parameter_group" "this" {
   name   = var.identifier
   family = "postgres${split(".", var.engine_version)[0]}"
 
-  # TLS only: a client without it is refused, not downgraded.
+  # TLS only: a client without it is refused, not downgraded. A static parameter: RDS stores
+  # it as pending-reboot, so saying so here keeps every later plan clean (found 2026-11-19, the
+  # first full session: the provider's default "immediate" re-applied it on every apply). The
+  # instance is created with the group, so the value holds from its first boot.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   # A lock wait longer than deadlock_timeout (1 s) is logged: contention on the orders and
