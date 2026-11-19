@@ -115,3 +115,33 @@ run "no_topic_grant_without_topics" {
     error_message = "No SNS grant when no topic delivers into a queue."
   }
 }
+
+run "log_delivery_can_read_an_encrypted_state_machine" {
+  command = plan
+
+  variables {
+    state_machine_log_delivery = true
+  }
+
+  assert {
+    condition = anytrue([for s in data.aws_iam_policy_document.key.statement : (
+      s.sid == "LogDeliveryReadsEncryptedStateMachines"
+      && contains(one(s.principals).identifiers, "delivery.logs.amazonaws.com")
+      && s.actions == toset(["kms:Decrypt"])
+      && anytrue([for c in s.condition : (
+        c.variable == "aws:SourceAccount" && contains(c.values, data.aws_caller_identity.current.account_id)
+      )])
+    )])
+    error_message = "CloudWatch log delivery decrypts the saga's execution data, Decrypt only, this account only (D11)."
+  }
+}
+
+run "no_log_delivery_grant_by_default" {
+  command = plan
+
+  assert {
+    condition     = !anytrue([for s in data.aws_iam_policy_document.key.statement : (s.sid == "LogDeliveryReadsEncryptedStateMachines")])
+    error_message = "No log-delivery grant unless a state machine on the key logs."
+  }
+}
+

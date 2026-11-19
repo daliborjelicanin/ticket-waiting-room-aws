@@ -12,3 +12,8 @@ output "connection_secret_arn" {
   description = "The events!connection/... secret EventBridge keeps the authorization in (AWS-owned key, D11)."
   value       = aws_cloudwatch_event_connection.saga.secret_arn
 }
+
+output "state_machine_arn" {
+  description = "The checkout saga, as foundation's purchase integration starts it."
+  value       = aws_sfn_state_machine.saga.arn
+}

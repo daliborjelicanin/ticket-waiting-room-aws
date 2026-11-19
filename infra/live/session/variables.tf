@@ -140,7 +140,7 @@ variable "enable_db" {
 }
 
 variable "enable_saga" {
-  description = "The checkout saga: its EventBridge connection (Cognito client_credentials, ticketing/ops), and the state machine to come (D5, D13). The connection's secret is $0.40/month prorated; no hourly charge."
+  description = "The checkout saga: the state machine (on the CMK, D11) and its EventBridge connection (Cognito client_credentials, ticketing/ops; D5, D13). No hourly charge: $0.025 per 1,000 state transitions, the connection's secret $0.40/month prorated. Its HTTP steps need the edge and the services up to do anything."
   type        = bool
   default     = false
 }

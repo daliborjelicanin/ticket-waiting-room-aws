@@ -45,6 +45,9 @@ locals {
     "cognito/user_pool_id",
     "cognito/ops_client_id",
     "cognito/token_url",
+    "iam/role/saga",
+    "messaging/queue/ticket-issuance/url",
+    "messaging/topic/purchase-confirmed/arn",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -345,7 +348,7 @@ check "migration_images" {
   }
 }
 
-# --- the checkout saga: its connection, and the state machine next (D5, D13) -----------------
+# --- the checkout saga: the state machine and its connection (D5, D11, D13) ------------------
 
 # The ops client's secret, read from the client itself: the one secret D13 accepts in state.
 data "aws_cognito_user_pool_client" "ops" {
@@ -363,4 +366,19 @@ module "saga" {
   token_url     = local.foundation["cognito/token_url"]
   client_id     = local.foundation["cognito/ops_client_id"]
   client_secret = data.aws_cognito_user_pool_client.ops[0].client_secret
+
+  # One definition, also read by the contract tests (modules/saga).
+  definition                   = file("${path.module}/../../../docs/checkout-saga.asl.json")
+  role_arn                     = local.foundation["iam/role/saga"]
+  issuance_queue_url           = local.foundation["messaging/queue/ticket-issuance/url"]
+  purchase_confirmed_topic_arn = local.foundation["messaging/topic/purchase-confirmed/arn"]
+  kms_key_arn                  = local.foundation["kms/key_arn"]
+  log_group_arn                = data.aws_cloudwatch_log_group.saga[0].arn
+}
+
+# Foundation's group, by its D25 name; the plan fails here if it is missing.
+data "aws_cloudwatch_log_group" "saga" {
+  count = var.enable_saga ? 1 : 0
+
+  name = "/aws/vendedlogs/states/${local.name_prefix}-checkout-saga"
 }

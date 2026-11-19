@@ -70,6 +70,30 @@ data "aws_iam_policy_document" "key" {
       }
     }
   }
+
+  # A state machine on this key that logs to CloudWatch: log delivery decrypts the execution
+  # data it writes. Without it the logging configuration is refused, or the log events never
+  # arrive (Step Functions "Data at rest encryption"). Scoped to this account.
+  dynamic "statement" {
+    for_each = var.state_machine_log_delivery ? [1] : []
+
+    content {
+      sid       = "LogDeliveryReadsEncryptedStateMachines"
+      actions   = ["kms:Decrypt"]
+      resources = ["*"]
+
+      principals {
+        type        = "Service"
+        identifiers = ["delivery.logs.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:SourceAccount"
+        values   = [local.account_id]
+      }
+    }
+  }
 }
 
 resource "aws_kms_key" "this" {

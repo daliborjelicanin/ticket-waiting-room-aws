@@ -132,6 +132,35 @@ data "aws_iam_policy_document" "saga" {
     }
   }
 
+  # The state machine's own data (definition, execution input and history, which carry the
+  # buyer's email) is on the CMK (D11). Step Functions encrypts and decrypts it as this role,
+  # scoped by the encryption context to this one state machine. No kms:ViaService here: AWS
+  # warns it can stop an execution from starting (Step Functions "Data at rest encryption").
+  statement {
+    sid       = "EncryptOwnExecutionData"
+    actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
+    resources = [var.kms_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:aws:states:stateMachineArn"
+      values   = [local.saga_arn_pattern]
+    }
+  }
+
+  # With that key on, the execution log events it delivers are encrypted under it as well.
+  statement {
+    sid       = "EncryptOwnLogDelivery"
+    actions   = ["kms:GenerateDataKey"]
+    resources = [var.kms_key_arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:SourceArn"
+      values   = ["${local.arn}:logs:${local.region}:${local.account_id}:*"]
+    }
+  }
+
   # Step Functions log delivery goes through the CloudWatch Logs delivery API, which takes no
   # resource (AWS documents "*" for these).
   statement {

@@ -14,3 +14,8 @@ output "saga_connection_name" {
   description = "The saga's EventBridge connection, for `aws events describe-connection` (D5). null with enable_saga off."
   value       = one(module.saga[*].connection_name)
 }
+
+output "saga_state_machine_arn" {
+  description = "The checkout saga (contains the account id: print it, never commit it). null with enable_saga off."
+  value       = one(module.saga[*].state_machine_arn)
+}

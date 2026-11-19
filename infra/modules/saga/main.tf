@@ -1,5 +1,5 @@
-# The checkout saga's session half (D5, D13): the EventBridge connection its HTTP tasks call
-# the services with. The state machine joins it here next (slice 3).
+# The checkout saga's session half (D5, D11, D13): the state machine, and the EventBridge
+# connection its HTTP tasks call the services with.
 #
 # Step Functions' HTTP task authenticates through a connection: EventBridge fetches a
 # client_credentials token from Cognito with the ops client, caches it, and refreshes it before
@@ -41,3 +41,53 @@ resource "aws_cloudwatch_event_connection" "saga" {
     }
   }
 }
+
+# --- the state machine ----------------------------------------------------------------------
+# One definition, docs/checkout-saga.asl.json, read by Terraform here and by the two contract
+# tests (checkout, ticket-issuance) that pin its wire format: three placeholders are replaced
+# rather than the file copied into a template, so the deployed saga and the tested one cannot
+# drift apart.
+
+locals {
+  definition = replace(replace(replace(var.definition,
+    "__CONNECTION_ARN__", aws_cloudwatch_event_connection.saga.arn),
+    "__QUEUE_URL__", var.issuance_queue_url),
+  "__TOPIC_ARN__", var.purchase_confirmed_topic_arn)
+}
+
+resource "aws_sfn_state_machine" "saga" {
+  # The name foundation's purchase integration starts and its IAM grants are scoped to (D25).
+  name     = "${var.name_prefix}-checkout-saga"
+  type     = "STANDARD" # exactly-once steps, a year of history, compensation that can wait
+  role_arn = var.role_arn
+
+  definition = local.definition
+
+  # Execution input and history carry the buyer's email: customer data, so the CMK (D11).
+  encryption_configuration {
+    type                              = "CUSTOMER_MANAGED_KMS_KEY"
+    kms_key_id                        = var.kms_key_arn
+    kms_data_key_reuse_period_seconds = 300 # as the queues (D11): a load test is not a KMS bill
+  }
+
+  # Every state transition, without its data: the log says which step failed and why, never
+  # whose purchase it was (D11: no personal data in logs).
+  logging_configuration {
+    log_destination        = "${var.log_group_arn}:*"
+    include_execution_data = false
+    level                  = "ALL"
+  }
+
+  # The saga is the trace's spine: API Gateway -> Step Functions -> the services (D16).
+  tracing_configuration {
+    enabled = true
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !strcontains(local.definition, "__CONNECTION_ARN__") && !strcontains(local.definition, "__QUEUE_URL__") && !strcontains(local.definition, "__TOPIC_ARN__")
+      error_message = "A placeholder survived the substitution."
+    }
+  }
+}
+

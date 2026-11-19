@@ -63,6 +63,8 @@ module "kms" {
 
   name                  = local.name_prefix
   sqs_delivering_topics = [for t in local.sqs_delivering_topics : "${local.name_prefix}-${t}"]
+  # The checkout saga runs on this key and logs its executions (session, modules/saga).
+  state_machine_log_delivery = true
 }
 
 module "observability" {

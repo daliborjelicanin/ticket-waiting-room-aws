@@ -19,3 +19,9 @@ variable "sqs_delivering_topics" {
   type        = list(string)
   default     = []
 }
+
+variable "state_machine_log_delivery" {
+  description = "A state machine on this key logs to CloudWatch (the checkout saga, D11, D16): CloudWatch's log delivery needs Decrypt on the key."
+  type        = bool
+  default     = false
+}

@@ -14,7 +14,7 @@ Part of Phase 2 (`docs/phase2-plan.md`). Inputs and outputs below are generated 
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.73 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.73.0 |
 
 ## Modules
 
@@ -38,6 +38,7 @@ No modules.
 | <a name="input_alarm_publishers"></a> [alarm\_publishers](#input\_alarm\_publishers) | Service principals that publish to the CMK-encrypted ops-alarms topic and so need GenerateDataKey + Decrypt on this key (D11, D16). | `list(string)` | <pre>[<br/>  "budgets.amazonaws.com",<br/>  "cloudwatch.amazonaws.com",<br/>  "costalerts.amazonaws.com",<br/>  "events.amazonaws.com"<br/>]</pre> | no |
 | <a name="input_name"></a> [name](#input\_name) | Alias name without the alias/ prefix, e.g. twr-dev. | `string` | n/a | yes |
 | <a name="input_sqs_delivering_topics"></a> [sqs\_delivering\_topics](#input\_sqs\_delivering\_topics) | Names of SNS topics that deliver to CMK-encrypted SQS queues; each needs GenerateDataKey + Decrypt on this key (D11). | `list(string)` | `[]` | no |
+| <a name="input_state_machine_log_delivery"></a> [state\_machine\_log\_delivery](#input\_state\_machine\_log\_delivery) | A state machine on this key logs to CloudWatch (the checkout saga, D11, D16): CloudWatch's log delivery needs Decrypt on the key. | `bool` | `false` | no |
 
 ## Outputs
 

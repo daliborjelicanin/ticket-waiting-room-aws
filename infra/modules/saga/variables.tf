@@ -39,3 +39,43 @@ variable "scope" {
     error_message = "The saga is the ops client: ticketing/ops and nothing wider (D12)."
   }
 }
+
+variable "definition" {
+  description = "The saga's Amazon States Language, as written in docs/checkout-saga.asl.json: JSON with the __CONNECTION_ARN__, __QUEUE_URL__ and __TOPIC_ARN__ placeholders that the contract tests read the same file around."
+  type        = string
+
+  validation {
+    condition = (
+      can(jsondecode(var.definition))
+      && strcontains(var.definition, "__CONNECTION_ARN__")
+      && strcontains(var.definition, "__QUEUE_URL__")
+      && strcontains(var.definition, "__TOPIC_ARN__")
+    )
+    error_message = "JSON carrying the three placeholders: is this docs/checkout-saga.asl.json?"
+  }
+}
+
+variable "role_arn" {
+  description = "Foundation's saga role (modules/iam): the HTTP tasks, the connection, SQS, SNS, X-Ray, log delivery, and the key for its own execution data."
+  type        = string
+}
+
+variable "issuance_queue_url" {
+  description = "The ticket-issuance queue the saga enqueues to after a confirmed purchase."
+  type        = string
+}
+
+variable "purchase_confirmed_topic_arn" {
+  description = "The purchase-confirmed topic the saga notifies on (the buyer's email goes to notification-service through it)."
+  type        = string
+}
+
+variable "kms_key_arn" {
+  description = "The CMK (D11): execution input and history carry the buyer's email."
+  type        = string
+}
+
+variable "log_group_arn" {
+  description = "Foundation's /aws/vendedlogs/states/<prefix>-checkout-saga group (D25)."
+  type        = string
+}
