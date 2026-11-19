@@ -54,8 +54,9 @@ class WaitingRoomFairnessIT {
 
     private static final AtomicInteger EVENT_SEQ = new AtomicInteger();
 
+    /** The engine and major ElastiCache runs in Phase 2 (D8): the Lua scripts are proved on what they will run on. */
     @Container
-    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("valkey/valkey:9.1-alpine"))
             .withExposedPorts(6379);
 
     private static LettuceConnectionFactory connectionFactory;

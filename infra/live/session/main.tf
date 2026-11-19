@@ -41,6 +41,7 @@ locals {
     "iam/role/migrate-execution",
     "ecr/checkout-payment-service",
     "ecr/ticket-issuance-service",
+    "messaging/queue/queue-admissions/url",
   ]
 
   # Per service: its SG, its two roles, its image repository (D3, D12, D15).
@@ -86,13 +87,16 @@ locals {
 
   service_repository = {
     seat-inventory = "seat-inventory-service"
+    waiting-room   = "waiting-room-service"
   }
 
   # Listener rules: lower number first, first match wins (runbook-alb-apigateway.md).
   service_route_priority = {
+    waiting-room   = 10
     seat-inventory = 20
   }
   service_route_paths = {
+    waiting-room   = ["/events/*/queue", "/events/*/queue/admit", "/events/*/admissions/*"]
     seat-inventory = ["/events/*/seats/*", "/admin/events/*/seats"]
   }
 
@@ -102,6 +106,17 @@ locals {
       SEAT_INVENTORY_TABLE_NAME = local.foundation["dynamodb/seat_table_name"]
       COGNITO_ISSUER_URI        = local.foundation["cognito/issuer_uri"]
       AWS_REGION                = var.region
+    }
+    # TLS to Valkey: the cluster refuses plaintext (transit_encryption_mode required, D8).
+    # ElastiCache's certificate chains to Amazon's root, which the Temurin image trusts.
+    # The endpoint is null with enable_cache off, which var.services refuses for this service.
+    waiting-room = {
+      REDIS_HOST          = one(module.cache[*].primary_endpoint)
+      REDIS_PORT          = "6379"
+      REDIS_SSL           = "true"
+      ADMISSION_QUEUE_URL = local.foundation["messaging/queue/queue-admissions/url"]
+      COGNITO_ISSUER_URI  = local.foundation["cognito/issuer_uri"]
+      AWS_REGION          = var.region
     }
   }
 

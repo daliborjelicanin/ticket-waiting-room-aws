@@ -79,8 +79,13 @@ variable "services" {
   default     = []
 
   validation {
-    condition     = alltrue([for s in var.services : contains(["seat-inventory"], s)])
-    error_message = "Only seat-inventory is wired so far."
+    condition     = alltrue([for s in var.services : contains(["seat-inventory", "waiting-room"], s)])
+    error_message = "Only seat-inventory and waiting-room are wired so far."
+  }
+
+  validation {
+    condition     = !contains(var.services, "waiting-room") || var.enable_cache
+    error_message = "waiting-room needs enable_cache: its queue is Valkey (D8)."
   }
 
   validation {
