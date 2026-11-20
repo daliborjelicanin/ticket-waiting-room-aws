@@ -7,7 +7,8 @@
 # Usage-priced resources (Lambda, SQS, DynamoDB on demand, Step Functions, API Gateway
 # requests) show no cost without a usage file; the hourly ones are what a forgotten session
 # costs. The account id comes from a placeholder written by the job (`ci.auto.tfvars`),
-# never the real one: nothing in the comment can identify the account.
+# never the real one: nothing in the comment can identify the account. A PR that touches this
+# file is priced against its base like any other infra change.
 version: 0.1
 
 projects:
