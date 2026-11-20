@@ -169,6 +169,11 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   files changed (D15)
 - `docker run --rm -v "$PWD":/repo:ro -w /repo rhysd/actionlint:1.7.7 -no-color` — lint every
   workflow (`ci.yml`'s `workflows` job runs it pinned by digest)
+- `infra/scripts/ci-plan.sh <root> tfplan` (after `source infra/scripts/tf-env.sh`) then
+  `infra/scripts/plan-summary.sh <root> tfplan` — the plan exactly as `terraform.yml` runs it:
+  digests from SSM, a log of addresses, actions and masked diagnostics only (`tf-log.sh`,
+  `mask-ids.sh`), and the Markdown change summary the PR comment carries (D14). Exit 0 no
+  changes, 2 changes, 1 error. Delete the plan file afterwards
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
@@ -191,10 +196,9 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   zero IntelliJ problems across every `.tf` file and a `plan` read before reporting done
 
 Not yet added (deliberately deferred until the relevant phase/work needs them):
-Jib/`bootBuildImage` config; the `session` stack's resources and the deploy workflows
-(`images.yml`, `terraform.yml`, `session.yml`, slice 4). `infra/` so far holds `org`,
-`bootstrap` and the `foundation` stack, applied from the owner's machine; `ci.yml` only
-checks. Docker packaging is hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
+Jib/`bootBuildImage` config; `session.yml`, `session-reaper.yml` and `drift.yml` (slice 4).
+`images.yml` builds the images and `terraform.yml` plans and applies foundation;
+`session` is still applied from the owner's machine with `session.sh`. Docker packaging is hand-written per module — see `seat-inventory-service/Dockerfile` (Fargate service) and
 `hold-cleanup-lambda/Dockerfile` (Lambda container image).
 
 ## Secrets and Identifiers — Never Committed

@@ -1,0 +1,16 @@
+# Terraform at the version in .terraform-version, without the wrapper (it would echo every
+# command's output, plan included, a second time). Used by every job that runs terraform.
+name: setup-terraform
+description: Terraform pinned by .terraform-version, wrapper off
+
+runs:
+  using: composite
+  steps:
+    - name: Read Terraform version
+      id: tf
+      shell: bash
+      run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+    - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ steps.tf.outputs.version }}
+        terraform_wrapper: false

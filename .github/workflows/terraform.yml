@@ -1,0 +1,140 @@
+# terraform (D14, D15): the foundation stack's plan on a pull request, posted as a change
+# summary, and its apply on main behind the `foundation` environment's required reviewer.
+# From the end of slice 4 this is the only way foundation is applied (D12).
+#
+#   pull request  plan foundation as tf-plan; comment the addresses and actions (no values)
+#   push to main  gates, then (after approval) plan and apply as tf-apply-foundation
+#   dispatch      the same on main, with no infra change: rolls the Lambdas onto the digests
+#                 images.yml recorded (D23)
+#
+# The session stack is not planned here: session.yml owns it. Logs carry addresses, actions
+# and masked diagnostics only (infra/scripts/tf-log.sh); the full plan stays on the runner and
+# is never uploaded (D14).
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - .terraform-version
+      - .github/workflows/terraform.yml
+      - .github/actions/**
+  push:
+    branches: [main]
+    paths:
+      - infra/**
+      - .terraform-version
+      - .github/workflows/terraform.yml
+      - .github/actions/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  ROOT: infra/live/foundation
+
+jobs:
+  # On a PR, ci.yml's required "terraform" check runs these; here they guard the apply only.
+  gates:
+    name: gates
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/terraform-gates
+
+  plan:
+    name: plan foundation
+    # A fork gets no OIDC token or secrets, and Dependabot no id-token: neither can plan (D14).
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: terraform-plan-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-terraform
+      - name: OIDC subject
+        run: scripts/oidc-subject.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/twr-dev-tf-plan
+          role-session-name: plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Plan
+        env:
+          TF_VAR_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          set +e
+          infra/scripts/ci-plan.sh "$ROOT" tfplan
+          rc=$?
+          set -e
+          [[ $rc != 1 ]] || exit 1
+          infra/scripts/plan-summary.sh "$ROOT" tfplan foundation > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment the change summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file summary.md --edit-last --create-if-none
+
+  apply:
+    name: apply foundation
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: gates
+    # The required reviewer approves here, before the job starts: read the PR's plan comment
+    # (or, for a direct push, `plan` locally) first. The plan below is in the job summary.
+    environment: foundation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Never cancel an apply halfway; a second one waits for the first.
+    concurrency:
+      group: terraform-foundation
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-terraform
+      - name: OIDC subject
+        run: scripts/oidc-subject.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/twr-dev-tf-apply-foundation
+          role-session-name: apply-foundation-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Plan
+        id: plan
+        env:
+          TF_VAR_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          set +e
+          infra/scripts/ci-plan.sh "$ROOT" tfplan
+          rc=$?
+          set -e
+          [[ $rc != 1 ]] || exit 1
+          infra/scripts/plan-summary.sh "$ROOT" tfplan foundation >> "$GITHUB_STEP_SUMMARY"
+          echo "changes=$([[ $rc == 2 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Apply
+        if: steps.plan.outputs.changes == 'true'
+        run: |
+          set -o pipefail
+          terraform -chdir="$ROOT" apply -input=false -lock-timeout=5m -json tfplan | infra/scripts/tf-log.sh
