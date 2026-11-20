@@ -163,6 +163,12 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   live instance as that service's role, from its own secret, through a throwaway `psql` task,
   and checks D9: DML on its own tables allowed; DDL, the Flyway history and the other
   database refused. Deletes its task definition on exit. See `docs/runbook-session-data.md`
+- `scripts/affected-images.sh <base-sha> <head-sha>` (or `--all`) — the images a change
+  touches, as `images.yml`'s build matrix: a module with a Dockerfile is affected when it, any
+  project it depends on (read from the `build.gradle.kts` files, transitively) or the build
+  files changed (D15)
+- `docker run --rm -v "$PWD":/repo:ro -w /repo rhysd/actionlint:1.7.7 -no-color` — lint every
+  workflow (`ci.yml`'s `workflows` job runs it pinned by digest)
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a

@@ -1,0 +1,137 @@
+# images (D15): every image a push to main touches, built natively for arm64, pushed to ECR
+# and recorded as a digest in SSM /twr/dev/images/<module>, where session.sh (services) and the
+# foundation apply (Lambdas, D23) take it from. Nothing here deploys.
+#
+# Identity: the ci-images role (D14), assumable only by this file on refs/heads/main; it can
+# push to the project's repositories and write /twr/dev/images/* and nothing else. The
+# account id is the AWS_ACCOUNT_ID secret, so it is masked wherever it appears, ECR hosts and
+# ARNs included. Nothing identifying is an input.
+name: images
+
+on:
+  push:
+    branches: [main]
+  # A manual run rebuilds every image (a new base image, a re-scan): there is no "before" commit
+  # to diff against, and no input to take.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A push never cancels another's build: a half-recorded set of digests is worse than a queue.
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  PREFIX: twr-dev
+
+jobs:
+  affected:
+    name: affected images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.affected.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: affected
+        name: Images this push touches (module, its project dependencies, the build files)
+        env:
+          BASE: ${{ github.event.before }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            matrix=$(scripts/affected-images.sh --all)
+          else
+            matrix=$(scripts/affected-images.sh "$BASE" "$GITHUB_SHA")
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "$matrix" | jq -r '"### Images to build\n" + (if length == 0 then "none" else (map("- `" + .module + "` (" + .kind + ")") | join("\n")) end)' >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: ${{ matrix.module }}
+    needs: affected
+    if: needs.affected.outputs.matrix != '[]'
+    # Native arm64: the images run on Graviton (D7), and QEMU makes a JVM build several times slower.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.affected.outputs.matrix) }}
+    env:
+      MODULE: ${{ matrix.module }}
+      KIND: ${{ matrix.kind }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Only launches Gradle; the build's JDK 26 toolchain is provisioned by foojay.
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "26"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      # Tests ran in ci.yml on the same commit; this job only packages.
+      - name: Package
+        run: |
+          if [[ "$KIND" == lambda ]]; then
+            ./gradlew ":$MODULE:build" -x test        # stages build/lambda/lib for the Dockerfile
+          else
+            ./gradlew ":$MODULE:bootJar"
+          fi
+
+      # D14: the subject the roles trust, printed once per run before anything relies on it.
+      - name: OIDC subject
+        run: |
+          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          cut -d. -f2 <<<"$token" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '"sub: " + .sub' || true
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/twr-dev-ci-images
+          role-session-name: images-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # The docker-container driver: the default docker driver cannot attach an SBOM.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build, push, record the digest
+        env:
+          ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          registry="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
+          repository="$PREFIX-$MODULE"
+          tag="${GITHUB_SHA::7}"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+
+          # Tags are immutable: a re-run (say, after a failed SSM write) reuses what was pushed.
+          if digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag" \
+              --query 'imageDetails[0].imageDigest' --output text 2>/dev/null); then
+            echo "$repository:$tag already pushed; recording it"
+          else
+            if [[ "$KIND" == lambda ]]; then
+              # Lambda accepts a single image manifest; an attestation makes an index (D15).
+              attest=(--provenance=false --sbom=false)
+            else
+              attest=(--provenance=mode=max --sbom=true)
+            fi
+            docker buildx build --platform linux/arm64 "${attest[@]}" --push \
+              --metadata-file meta.json -t "$registry/$repository:$tag" "$MODULE"
+            digest=$(jq -r '."containerimage.digest"' meta.json)
+          fi
+          [[ "$digest" == sha256:* ]] || { echo "no digest for $repository:$tag" >&2; exit 1; }
+
+          aws ssm put-parameter --name "/twr/dev/images/$MODULE" --type String --value "$digest" --overwrite \
+            --query Version --output text | sed 's/^/SSM version /'
+          echo "| \`$MODULE\` | \`$tag\` | \`$digest\` |" >> "$GITHUB_STEP_SUMMARY"
+          docker logout "$registry"

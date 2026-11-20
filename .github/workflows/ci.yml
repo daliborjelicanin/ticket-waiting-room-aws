@@ -1,6 +1,6 @@
-# CI (D2, D14): the checks the ruleset on main requires — Gradle, and the Terraform gates (fmt,
-# validate, terraform test, tflint, trivy). No AWS credentials here and no OIDC; slice 4 adds images.yml and
-# terraform.yml with their roles.
+# CI (D2, D14): the checks the ruleset on main requires — Gradle, the Terraform gates (fmt,
+# validate, terraform test, tflint, trivy) and the workflows' own lint. No AWS credentials here
+# and no OIDC: the workflows that assume a role (images.yml, and the rest of slice 4) are separate.
 name: ci
 
 on:
@@ -96,3 +96,20 @@ jobs:
           docker run --rm -v "$PWD":/src:ro -w /src \
             aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
             config --quiet --exit-code 1 --ignorefile .trivyignore.yaml .
+
+  # The workflows themselves (D14): expressions, contexts, job wiring and, through its bundled
+  # shellcheck, every run: script. A mistake here otherwise surfaces as a failed deploy on main.
+  # Pinned by digest, like trivy.
+  workflows:
+    name: workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD":/repo:ro -w /repo \
+            rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            -no-color

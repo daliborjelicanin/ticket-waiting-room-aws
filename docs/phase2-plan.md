@@ -1687,7 +1687,14 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
 
 ### 4. CI/CD — $0
 - [ ] Infracost comment on infra PRs (API key as an Actions secret) (D17)
-- [ ] `ci.yml`, `images.yml` (affected-image matrix, native arm64, digests → SSM, SBOM), `terraform.yml` (gates, `terraform test`, plan **summary** comment, gated apply)
+- [ ] `ci.yml`, `images.yml` (affected-image matrix, native arm64, digests → SSM, SBOM), `terraform.yml` (gates, `terraform test`, plan **summary** comment, gated apply) — *in progress 2026-11-20:*
+  - **`images.yml` written, not yet run.**
+    - **Matrix.** It comes from `scripts/affected-images.sh`, which reads each image module's project dependencies from the build files transitively, plus the build files themselves. Checked on history: a docs-only commit gives none; the SES commit gives notification only; the migration-starter commit, which changed `settings.gradle.kts`, gives all 8; an unknown base gives all.
+    - **Build.** Native arm64 runners. Services are pushed with SBOM and provenance, Lambdas without (D15). An existing immutable tag is reused, so a re-run completes. The digest goes to SSM `/twr/dev/images/<module>`.
+    - **Identity.** The `ci-images` role, by OIDC; the token's `sub` is printed first (D14).
+    - **Account id.** It comes from the `AWS_ACCOUNT_ID` secret rather than a variable (D14 said a masked variable): a secret is masked everywhere it appears, including inside ECR hosts and ARNs, without each job remembering `::add-mask::`.
+    - **A manual dispatch** rebuilds every image.
+  - **`ci.yml`** gains a `workflows` job: actionlint, pinned by digest, including shellcheck of every `run:` script.
 - [ ] Every action pinned to a SHA; per-workflow `permissions`; account id masked in every job — check one public log by eye (D14)
 - [ ] `session.yml` wrapping `session.sh` (D23) green from a cold session stack; a rollback by digest input exercised
 - [ ] **From here on, foundation is applied only from CI** (D12); local applies stop
