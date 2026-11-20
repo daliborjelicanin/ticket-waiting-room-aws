@@ -21,6 +21,10 @@ notification:
   # customer reference rather than an address, so mail goes here unless the reference is
   # itself an email. See runbook-notifications.md.
   fallback-recipient: ${NOTIFICATION_TO:}
+  # Set only while SES is in the sandbox (D20 deferred the domain and production access):
+  # every mail then goes to this verified identity, its body naming the intended buyer.
+  # Empty locally and in production.
+  sandbox-recipient: ${NOTIFICATION_SANDBOX_TO:}
   ticket-base-url: ${TICKET_BASE_URL:http://localhost:8080}
   consumer:
     enabled: ${NOTIFICATION_CONSUMER_ENABLED:true}

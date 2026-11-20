@@ -173,3 +173,26 @@ variable "db_secret_version" {
   type        = number
   default     = 1
 }
+
+variable "drill_environment" {
+  description = <<-EOT
+    Failure drills: extra environment per service, merged over its own, limited to the test
+    knobs listed in the validation. The refund drill (runbook-checkout-saga.md, The Refund Path):
+      -var 'drill_environment={"seat-inventory":{"SEAT_INVENTORY_HOLD_DURATION":"PT10S"},"checkout":{"PAYMENT_GATEWAY_LATENCY":"PT15S"}}'
+    Empty, the default, is production behaviour. Applying it redeploys the services it names.
+  EOT
+  type        = map(map(string))
+  default     = {}
+
+  # An allowlist, so a drill can never replace a URL, a secret reference or a feature switch.
+  validation {
+    condition = alltrue(flatten([for service, vars in var.drill_environment : [
+      for name in keys(vars) : (contains(lookup({
+        seat-inventory = ["SEAT_INVENTORY_HOLD_DURATION"]
+        checkout       = ["PAYMENT_GATEWAY_LATENCY", "PAYMENT_GATEWAY_DECLINE_RATE", "PAYMENT_GATEWAY_ERROR_RATE"]
+      }, service, []), name))
+    ]]))
+    error_message = "Drill knobs only: seat-inventory SEAT_INVENTORY_HOLD_DURATION; checkout PAYMENT_GATEWAY_LATENCY, _DECLINE_RATE, _ERROR_RATE."
+  }
+}
+

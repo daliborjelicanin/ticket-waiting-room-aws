@@ -160,9 +160,12 @@ locals {
       NOTIFICATION_SENDER    = "ses"
       NOTIFICATION_FROM      = local.foundation["ses/from_address"]
       NOTIFICATION_TO        = local.foundation["ses/fallback_recipient"]
-      TICKET_BASE_URL        = one(module.rest_stage[*].invoke_url)
-      COGNITO_ISSUER_URI     = local.foundation["cognito/issuer_uri"]
-      AWS_REGION             = var.region
+      # Every mail to the verified identity while SES is in the sandbox: load-test buyers have
+      # made-up addresses the sandbox refuses (found 2026-11-19). Drop it with production access.
+      NOTIFICATION_SANDBOX_TO = local.foundation["ses/fallback_recipient"]
+      TICKET_BASE_URL         = one(module.rest_stage[*].invoke_url)
+      COGNITO_ISSUER_URI      = local.foundation["cognito/issuer_uri"]
+      AWS_REGION              = var.region
     }
   }
 
@@ -331,7 +334,7 @@ module "service" {
   subnet_ids         = local.app_subnet_ids
   security_group_id  = local.foundation["network/sg/${each.key}"]
 
-  environment                = local.service_environment[each.key]
+  environment                = merge(local.service_environment[each.key], lookup(var.drill_environment, each.key, {}))
   secrets                    = local.service_secrets[each.key]
   log_group_name             = local.service_log_group[each.key]
   region                     = var.region

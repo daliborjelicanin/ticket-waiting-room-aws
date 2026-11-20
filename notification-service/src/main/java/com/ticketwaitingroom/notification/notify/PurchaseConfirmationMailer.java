@@ -3,7 +3,10 @@ package com.ticketwaitingroom.notification.notify;
 import com.ticketwaitingroom.common.events.PurchaseConfirmedEvent;
 import com.ticketwaitingroom.notification.config.NotificationProperties;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.Locale;
 
@@ -11,7 +14,7 @@ import java.util.Locale;
  * Renders and sends the purchase-confirmation email.
  *
  * <p>The mail deliberately does <strong>not</strong> embed the QR image or a presigned link
- * to it. This event fires when payment was capturhttps://github.com/daliborjelicanined, which is upstream of issuance and
+ * to it. This event fires when payment was captured, which is upstream of issuance and
  * rendering — the ticket may not exist yet, and a presigned URL minted here would be for an
  * object that is not in the bucket and would expire long before anyone opened it anyway. So
  * the mail links to the issuance service, which is the component that actually knows
@@ -21,6 +24,8 @@ import java.util.Locale;
 @Service
 @RequiredArgsConstructor
 public class PurchaseConfirmationMailer {
+
+    private static final Logger log = LoggerFactory.getLogger(PurchaseConfirmationMailer.class);
 
     private final NotificationSender sender;
     private final NotificationProperties properties;
@@ -58,10 +63,15 @@ public class PurchaseConfirmationMailer {
                 trimTrailingSlash(properties.ticketBaseUrl()),
                 event.orderId());
 
-        return new Email(
-                recipientFor(event),
-                "Ticket purchase confirmed — seat %s".formatted(event.seatId()),
-                body);
+        String recipient = recipientFor(event);
+        String subject = "Ticket purchase confirmed — seat %s".formatted(event.seatId());
+        if (StringUtils.hasText(properties.sandboxRecipient())) {
+            // Logged without either address: no personal data in logs (D11).
+            log.info("SES sandbox: confirmation for order {} redirected to the sandbox recipient", event.orderId());
+            return new Email(properties.sandboxRecipient(), subject,
+                    "[SES sandbox: addressed to %s]%n%n%s".formatted(recipient, body));
+        }
+        return new Email(recipient, subject, body);
     }
 
     /**
@@ -72,8 +82,12 @@ public class PurchaseConfirmationMailer {
      * <p>{@code customerRef} is deliberately not consulted: it now carries a Cognito
      * {@code sub}, which never looks like an address, so the older "use it if it contains
      * an @" rule would silently send every mail to the fallback and look like it worked.
-     * The fallback remains for the SES sandbox, which only delivers to verified identities
-     * anyway.
+     * The fallback is for an event with no email at all.
+     *
+     * <p>The SES sandbox is a separate concern, handled in {@link #render}: it delivers only to
+     * verified identities, so with {@code sandboxRecipient} set every mail goes there instead,
+     * and its body names the address it was meant for, so a test still shows that the right
+     * buyer was chosen.
      */
     private String recipientFor(PurchaseConfirmedEvent event) {
         String email = event.email();

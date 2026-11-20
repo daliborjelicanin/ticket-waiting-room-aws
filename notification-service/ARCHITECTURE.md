@@ -52,10 +52,20 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    H["customerRef"] -->|"contains @"| I["send there — keeps a real<br/>end-to-end run honest"]
-    H -->|"opaque ref, e.g. cust-saga-1"| J["fallbackRecipient —<br/>the verified sandbox identity"]
-    K["SES sandbox: sender <i>and</i> every recipient<br/>must be a verified identity, so an unverified<br/>address fails the call rather than bouncing later.<br/>A thrown exception leaves the message on the queue —<br/>which is the better failure."] -.- J
+    H["event.email — the verified Cognito claim,<br/>put there by API Gateway, never the request body"] -->|"present"| I["the buyer"]
+    H -->|"absent"| J["fallbackRecipient"]
+    R{"sandboxRecipient set?<br/>(only while SES is in the sandbox)"}
+    I --> R
+    J --> R
+    R -->|"no: production"| S["send to that address"]
+    R -->|"yes"| T["send to sandboxRecipient,<br/>body opens with<br/>[SES sandbox: addressed to …]"]
+    K["SES sandbox: sender <i>and</i> every recipient<br/>must be a verified identity. A made-up load-test<br/>address (lt-N@example.test) fails the call:<br/>MessageRejectedException, retried, then the DLQ.<br/>Found 2026-11-19 on the first purchase on AWS."] -.- T
 ```
+
+`customerRef` is a Cognito `sub` and is never treated as an address. The sandbox redirect is a
+separate setting from the fallback, so the two meanings never blur: the session sets
+`NOTIFICATION_SANDBOX_TO` to the verified recipient from SSM, and stops setting it once SES has
+production access (D20).
 
 ## The accepted duplicate
 

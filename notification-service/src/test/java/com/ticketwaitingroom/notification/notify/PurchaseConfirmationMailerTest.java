@@ -20,7 +20,7 @@ class PurchaseConfirmationMailerTest {
 
     @Test
     void rendersTheConfirmationWithOrderSeatAndAmount() {
-        Email email = mailer("no-reply@example.test", "me@example.test").render(EVENT);
+        Email email = mailer("me@example.test").render(EVENT);
 
         assertThat(email.subject()).isEqualTo("Ticket purchase confirmed — seat A-12");
         assertThat(email.body())
@@ -34,7 +34,7 @@ class PurchaseConfirmationMailerTest {
 
     @Test
     void linksToTheIssuanceServiceRatherThanEmbeddingAQr() {
-        Email email = mailer("no-reply@example.test", "me@example.test").render(EVENT);
+        Email email = mailer("me@example.test").render(EVENT);
 
         // This event fires at capture, which is upstream of issuance and rendering — a
         // presigned URL minted here would point at an object that does not exist yet.
@@ -44,7 +44,7 @@ class PurchaseConfirmationMailerTest {
 
     @Test
     void sendsToTheVerifiedAddressFromTheEvent() {
-        Email email = mailer("no-reply@example.test", "verified@example.test").render(EVENT);
+        Email email = mailer("verified@example.test").render(EVENT);
 
         assertThat(email.recipient()).isEqualTo("buyer@example.test");
     }
@@ -57,14 +57,40 @@ class PurchaseConfirmationMailerTest {
         PurchaseConfirmedEvent noEmail = new PurchaseConfirmedEvent(
                 EVENT.orderId(), "evt-1", "A-12", "attacker@example.test", null, "gw-ref-9", 12000L);
 
-        Email email = mailer("no-reply@example.test", "verified@example.test").render(noEmail);
+        Email email = mailer("verified@example.test").render(noEmail);
 
         assertThat(email.recipient()).isEqualTo("verified@example.test");
     }
 
-    private PurchaseConfirmationMailer mailer(String from, String fallback) {
+    @Test
+    void inTheSandboxEveryMailGoesToTheSandboxRecipientNamingTheBuyer() {
+        Email email = mailer("verified@example.test", "sandbox@example.test").render(EVENT);
+
+        assertThat(email.recipient()).isEqualTo("sandbox@example.test");
+        assertThat(email.body())
+                .startsWith("[SES sandbox: addressed to buyer@example.test]")
+                .contains(EVENT.orderId());
+        assertThat(email.subject()).isEqualTo("Ticket purchase confirmed — seat A-12");
+    }
+
+    @Test
+    void inTheSandboxAnEventWithoutEmailStillNamesTheFallback() {
+        PurchaseConfirmedEvent noEmail = new PurchaseConfirmedEvent(
+                EVENT.orderId(), "evt-1", "A-12", EVENT.customerRef(), null, "gw-ref-9", 12000L);
+
+        Email email = mailer("verified@example.test", "sandbox@example.test").render(noEmail);
+
+        assertThat(email.recipient()).isEqualTo("sandbox@example.test");
+        assertThat(email.body()).startsWith("[SES sandbox: addressed to verified@example.test]");
+    }
+
+    private PurchaseConfirmationMailer mailer(String fallback) {
+        return mailer(fallback, "");
+    }
+
+    private PurchaseConfirmationMailer mailer(String fallback, String sandbox) {
         return new PurchaseConfirmationMailer(sender, new NotificationProperties(
-                "https://sqs.test/queue", "logging", from, fallback, "https://tickets.example.test/",
+                "https://sqs.test/queue", "logging", "no-reply@example.test", fallback, sandbox, "https://tickets.example.test/",
                 new NotificationProperties.ConsumerProperties(false, 1, 10, Duration.ofSeconds(1))),
                 new NotificationMetrics(new SimpleMeterRegistry()));
     }
