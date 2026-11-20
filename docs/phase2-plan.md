@@ -1667,6 +1667,9 @@ Working rhythm per slice: **(a) write the module + `plan` → (b) apply in a ses
     - **Where it is set.** The session sets it from `ses/fallback_recipient`. It is dropped with SES production access (D20).
     - **Tests.** Mailer tests 6 (2 new; both fail with the redirect removed). The consumer IT passes with the setting unset.
     - **Docs.** notification's `ARCHITECTURE.md` recipient diagram was redrawn; it still showed the pre-Cognito `customerRef` rule.
+    - **Image.** Pushed at `9e2b564` (arm64).
+  - *Refund drill knob, 2026-11-20:* the session variable `drill_environment` merges extra environment per service, limited by an allowlist (seat-inventory `SEAT_INVENTORY_HOLD_DURATION`; checkout `PAYMENT_GATEWAY_LATENCY`, `_DECLINE_RATE`, `_ERROR_RATE`). Spring's relaxed binding maps these onto the properties. Checked: a non-drill variable is refused, and so is a drill knob on the wrong service. The refund drill's two knobs plan into the task definitions.
+  - *Found 2026-11-20:* every session plan with `enable_db` off failed ("Invalid template interpolation value"). The `db_url` local interpolated the RDS address, which is null without the instance. The bug came in with the `session.sh` wiring and went unseen because every later plan had the database on. Fixed by building the URLs only with the instance. The all-off plan is healthy again (an output value only).
 - [ ] Verify: purchase happy path; **the refund path on AWS for the first time** (`runbook-checkout-saga.md`, *The Refund Path*); both still green with the baseline in `block`
 - **Learn:** migrations as a deploy step, ECS Exec as the bastion
 

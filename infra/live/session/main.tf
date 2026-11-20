@@ -171,9 +171,12 @@ locals {
 
   # The database services' login, from their own secrets' JSON keys (D13). null with enable_db
   # off, which var.services refuses for these two.
+  # Built only with the instance: a null address cannot go into a string template, and with
+  # enable_db off every plan failed here (found 2026-11-20; every plan since the wiring had the
+  # database on).
   db_url = {
-    checkout  = "jdbc:postgresql://${one(module.rds[*].address)}:5432/checkout?sslmode=require"
-    ticketing = "jdbc:postgresql://${one(module.rds[*].address)}:5432/ticketing?sslmode=require"
+    checkout  = var.enable_db ? "jdbc:postgresql://${module.rds[0].address}:5432/checkout?sslmode=require" : null
+    ticketing = var.enable_db ? "jdbc:postgresql://${module.rds[0].address}:5432/ticketing?sslmode=require" : null
   }
   service_secrets = {
     seat-inventory = {}
