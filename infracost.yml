@@ -1,0 +1,28 @@
+# Infracost (D17): what each stack costs if it runs all month, priced from the Terraform code
+# alone (no plan, no AWS credentials). terraform.yml's `cost` job compares a PR against its
+# base and comments the difference.
+#
+# The session stack is priced with everything on: Infracost assumes a full month, which for a
+# session is exactly the price of forgetting it, the number to see before merging (D17).
+# Usage-priced resources (Lambda, SQS, DynamoDB on demand, Step Functions, API Gateway
+# requests) show no cost without a usage file; the hourly ones are what a forgotten session
+# costs. The account id comes from a placeholder written by the job (`ci.auto.tfvars`),
+# never the real one: nothing in the comment can identify the account.
+version: 0.1
+
+projects:
+  - path: infra/live/foundation
+    name: foundation
+    terraform_vars:
+      image_digests: {}
+
+  - path: infra/live/session
+    name: session (everything on, a full month)
+    terraform_vars:
+      enable_alb: true
+      enable_waf: true
+      enable_nat: true
+      enable_db: true
+      enable_cache: true
+      enable_saga: true
+      services: [seat-inventory, waiting-room, checkout, issuance, notification]

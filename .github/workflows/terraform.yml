@@ -2,7 +2,8 @@
 # summary, and its apply on main behind the `foundation` environment's required reviewer.
 # From the end of slice 4 this is the only way foundation is applied (D12).
 #
-#   pull request  plan foundation as tf-plan; comment the addresses and actions (no values)
+#   pull request  plan foundation as tf-plan; comment the addresses and actions (no values);
+#                 price both stacks against the base branch with Infracost and comment that (D17)
 #   push to main  gates, then (after approval) plan and apply as tf-apply-foundation
 #   dispatch      the same on main, with no infra change: rolls the Lambdas onto the digests
 #                 images.yml recorded (D23)
@@ -19,6 +20,7 @@ on:
       - .terraform-version
       - .github/workflows/terraform.yml
       - .github/actions/**
+      - infracost.yml
   push:
     branches: [main]
     paths:
@@ -91,7 +93,75 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR" --body-file summary.md --edit-last --create-if-none
+        run: scripts/pr-comment.sh "$PR" terraform-plan-foundation summary.md
+
+  # Infracost (D17): each stack priced as if it ran a full month, the PR against its base, as
+  # one PR comment. Priced from the code alone: no AWS credentials, no OIDC. The classic CLI,
+  # pinned by digest like trivy; INFRACOST_ENABLE_CLOUD=false keeps the results off
+  # Infracost's dashboard. The account id is a placeholder (infracost.yml).
+  cost:
+    name: cost
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: terraform-cost-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      INFRACOST_IMAGE: infracost/infracost:0.10.50@sha256:8b22ba68b498e2fb5f98a3d8572e43c1ff49627cebe5658ce2350081f6ea78b5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: head
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - name: Price the base, diff the PR, comment
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ -z "$INFRACOST_API_KEY" ]]; then
+            echo "::warning::INFRACOST_API_KEY is not set; no cost estimate"
+            exit 0
+          fi
+          # A placeholder account id: required by the roots, never the real one.
+          for side in base head; do
+            for root in foundation session; do
+              [[ -d "$side/infra/live/$root" ]] || continue
+              printf 'account_id = "%012d"\n' 0 > "$side/infra/live/$root/ci.auto.tfvars"
+            done
+          done
+          infracost() { # side, args...
+            local side=$1; shift
+            docker run --rm -v "$PWD":/w -w "/w/$side" \
+              -e INFRACOST_API_KEY -e INFRACOST_ENABLE_CLOUD=false \
+              -e INFRACOST_SKIP_UPDATE_CHECK=true -e INFRACOST_NO_COLOR=true \
+              "$INFRACOST_IMAGE" "$@"
+          }
+          # A base without infracost.yml (this file's own PR) has nothing to compare against:
+          # the PR's own totals are the comment.
+          if [[ -f base/infracost.yml ]]; then
+            infracost base breakdown --config-file infracost.yml --format json --out-file /w/base.json
+            infracost head diff --config-file infracost.yml --compare-to /w/base.json \
+              --format json --out-file /w/diff.json
+          else
+            infracost head breakdown --config-file infracost.yml --format json --out-file /w/diff.json
+          fi
+          infracost head output --path /w/diff.json --format github-comment --show-skipped \
+            --out-file /w/cost.md
+          cat cost.md >> "$GITHUB_STEP_SUMMARY"
+          head/scripts/pr-comment.sh "$PR" infracost cost.md
 
   apply:
     name: apply foundation

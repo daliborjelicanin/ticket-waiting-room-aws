@@ -174,6 +174,11 @@ afterwards (`scripts/invariants.sh` — the "0 double-sold seats" line). k6 runs
   digests from SSM, a log of addresses, actions and masked diagnostics only (`tf-log.sh`,
   `mask-ids.sh`), and the Markdown change summary the PR comment carries (D14). Exit 0 no
   changes, 2 changes, 1 error. Delete the plan file afterwards
+- `docker run --rm -v "$PWD":/w -w /w -e INFRACOST_API_KEY -e INFRACOST_ENABLE_CLOUD=false
+  infracost/infracost:0.10.50 breakdown --config-file infracost.yml` — what each stack costs
+  for a full month, session with everything on (D17), as `terraform.yml`'s `cost` job prices a
+  PR. The roots need an `account_id`: put a placeholder (`printf 'account_id = "%012d"\n' 0`)
+  in a `ci.auto.tfvars` (gitignored) in each root, never the real one
 - `git config core.hooksPath .githooks` — once per clone: enables the pre-commit secret
   scan (see *Secrets and identifiers* below)
 - `./gradlew :<module>:dependencies --configuration compileClasspath` — inspect a
