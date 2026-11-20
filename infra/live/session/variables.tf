@@ -56,9 +56,9 @@ variable "nat_mode" {
 }
 
 variable "waf_baseline_mode" {
-  description = "AWS managed baseline on the whole stage: count until its sampled requests (the saga's included, slice 3) are reviewed, then block (D5, D6)."
+  description = "AWS managed baseline on the whole stage (D5, D6): block. Reviewed 2026-11-20 against a full session's traffic in count mode, the saga's own calls back through the stage and the refund path included: no baseline rule matched. count stays for reviewing a new kind of traffic before it meets the block."
   type        = string
-  default     = "count"
+  default     = "block"
 
   validation {
     condition     = contains(["count", "block"], var.waf_baseline_mode)

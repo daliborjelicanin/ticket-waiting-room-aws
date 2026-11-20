@@ -425,7 +425,15 @@ Also worth deleting if you rebuild: CloudWatch log group
 
 ## The Refund Path
 
-Added 2026-10-07, in code and tests. **It has not been run on AWS yet**: the steps below
+**Run on AWS for the first time 2026-11-20 (Phase 2), as specified below.** `ConfirmPurchase`
+failed once with a 404 and was not retried. `tok_ok` ended at `PurchaseRefunded`: order
+`REFUNDED`, seat `AVAILABLE`. `tok_refund_error` ended at `RefundFailed`: order still `PAID`.
+Both behaved the same with the WAF baseline blocking. In Phase 2 the drill is
+`-var drill_environment=…` on the session (see `infra/live/session/variables.tf`), and each
+purchase is one `load-test/scripts/saga-purchase.sh` call. Results are in
+`docs/phase2-plan.md`, slice 3 verify.
+
+Added 2026-10-07, in code and tests. Until the run above, it had not been run on AWS: the steps below
 deploy and prove it in the next session that has the stack up.
 
 ### Why it waited for a fix in seat inventory

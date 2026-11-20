@@ -42,6 +42,15 @@ load-test/scripts/mint-tokens.sh 50                # before every run (tokens li
 k6 run -e API=$API -e EVENT=buy-$(date +%s) -e USERS=50 -e SEATS=10 k6/purchase-race.js
 ```
 
+```bash
+# One purchase end to end through the edge and the saga: seed, join, admit, buy, wait, then
+# the states entered, the order and the seat (the slice 3 verify and the refund drill).
+export API
+load-test/scripts/mint-tokens.sh 2
+load-test/scripts/saga-purchase.sh happy-$(date +%s) A1 0             # tok_ok: SUCCEEDED
+load-test/scripts/saga-purchase.sh refund-$(date +%s) A1 1 tok_ok     # under the refund drill: PurchaseRefunded
+```
+
 The full session around the seat race (image, apply, checks, destroy) is
 `docs/runbook-session-edge.md` §6.
 
